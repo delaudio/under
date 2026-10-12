@@ -25,6 +25,10 @@ test("RPC teardown never surfaces an abandoned request as an unhandled rejection
   try {
     rpc.dispose();
     await Bun.sleep(25);
+    // A call made against the disposed RPC is rejected the same way.
+    const afterDispose = rpc.call("after-dispose");
+    void afterDispose;
+    await Bun.sleep(25);
   } finally {
     process.off("unhandledRejection", onUnhandled);
     socket.destroy();

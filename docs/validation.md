@@ -21,7 +21,7 @@ use `--clean` or disable automatic initial editor launch. Directory containment,
 wrapped-menu mouse positions and unavailable agent actions have native tests.
 
 On 2026-10-12, local macOS arm64 verification with Bun 1.4.3 and Neovim
-0.12.5 passed strict checking, all 37 native tests with no skips, Storybook
+0.12.5 passed strict checking, all 38 native tests with no skips, Storybook
 checking/build, and all 32 browser checks (31 screenshot comparisons and one
 catalog/inventory check). Baselines were inspected before comparison. A separate
 local probe confirmed startup and input with the owner's ordinary Neovim
@@ -64,6 +64,7 @@ Coverage includes:
 - cursor-only updates, background output, menu ownership, clipping and resize with live panes;
 - RPC teardown races reject in-flight requests without an unhandled rejection;
 - quit confirms editor exit from the editor socket and the process table, not only the PTY exit event;
+- the lockfile resolves packages from the public registry only, so a mirror or private registry cannot be published with it;
 - actual Neovim geometry after startup/resize/zoom and arrow-key scrolling with relative numbers, cursorline and Unicode;
 - native Codex/Claude/OpenCode CLI execution in embedded PTYs.
 
