@@ -78,31 +78,53 @@ export class PtyHost {
   }
   private async cleanup() {
     this.phase = "stopping";
-    const alive = () => {
+    // macOS may reject a negative-pid probe after the leader has been reaped.
+    // Only accept that result when the process table proves the group is gone.
+    const goneAfterExit = async () => {
+      // Darwin may deny probes against a zombie before Bun delivers its exit event.
+      // Yield once for reaping, then still require both exit and process-table proof.
+      if (this.exitCode === null)
+        await Promise.race([this.process.exited, Bun.sleep(50)]);
+      if (this.exitCode === null) return false;
+      const result = Bun.spawnSync({ cmd: ["/bin/ps", "-axo", "pgid="] });
+      if (result.exitCode !== 0) return false;
+      const groups = result.stdout
+        .toString()
+        .split("\n")
+        .map((row) => row.trim())
+        .filter((row) => /^\d+$/.test(row))
+        .map(Number);
+      return groups.length > 0 && !groups.includes(this.process.pid);
+    };
+    const alive = async () => {
       try {
         process.kill(-this.process.pid, 0);
         return true;
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === "ESRCH") return false;
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === "ESRCH" || (code === "EPERM" && (await goneAfterExit())))
+          return false;
         throw e;
       }
     };
-    const signal = (s: NodeJS.Signals) => {
+    const signal = async (s: NodeJS.Signals) => {
       try {
         process.kill(-this.process.pid, s);
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH" && !(code === "EPERM" && (await goneAfterExit())))
+          throw e;
       }
     };
     const wait = async () => {
       const end = Date.now() + 1500;
-      while (alive() && Date.now() < end) await Bun.sleep(25);
-      return !alive();
+      while ((await alive()) && Date.now() < end) await Bun.sleep(25);
+      return !(await alive());
     };
     try {
-      signal("SIGTERM");
+      await signal("SIGTERM");
       if (!(await wait())) {
-        signal("SIGKILL");
+        await signal("SIGKILL");
         if (!(await wait()))
           throw new Error(`Process group ${this.process.pid} survived cleanup`);
       }

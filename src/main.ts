@@ -5,8 +5,12 @@ import { loadState } from "./state.ts";
 import { statePath } from "./config.ts";
 import { openRemote } from "./bridge.ts";
 
-export const HELP = `Under — a flexible terminal IDE\n\nUsage: under [directory] [--restore] [--no-editor]\n       under open <file> [--line N] [--column N]\n       under --help | --version\n\nCtrl-G enters application navigation; p opens the command palette.\nTools and repository tasks start only through explicit actions.\n--restore restores layout metadata with all processes initially stopped.\nunder open uses UNDER_OPEN_SOCKET inside Yazi, Hunk or task panes.\n`;
+export const HELP = `Under — a flexible terminal IDE\n\nUsage: under [directory] [--restore] [--no-editor]\n       under open <file> [--line N] [--column N]\n       under --help | --version\n\nCtrl-G enters application navigation; m opens the top menu, p the palette.\nFiles are on the left, Neovim in the centre and agent chat on the right.\nClick Agent to choose a provider; Ctrl-G f focuses files.\nTools and repository tasks start only through explicit actions.\n--restore restores layout metadata with all processes initially stopped.\nunder open uses UNDER_OPEN_SOCKET inside Yazi, Hunk or task panes.\n`;
 export async function main(args = process.argv.slice(2)) {
+  if (!Bun.semver.satisfies(Bun.version, ">=1.4.3"))
+    throw new Error(
+      `Under requires Bun >= 1.4.3; found ${Bun.version}. Run: bun upgrade`,
+    );
   if (args.includes("--help") || args.includes("-h")) {
     console.log(HELP);
     return;

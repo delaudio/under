@@ -74,7 +74,7 @@ test("nested splits cover all panes with positive geometry and remove cleanly", 
       width: width!,
       height: height!,
     });
-    expect(r.size).toBe(3);
+    expect(r.size).toBe(4);
     for (const c of r.values()) {
       expect(c.width).toBeGreaterThan(0);
       expect(c.height).toBeGreaterThan(0);
@@ -84,7 +84,7 @@ test("nested splits cover all panes with positive geometry and remove cleanly", 
   expect(JSON.stringify(t.layout)).toContain("0.15");
   t.layout = remove(t.layout, p.id)!;
   expect(rectangles(t.layout, { x: 0, y: 0, width: 80, height: 24 }).size).toBe(
-    2,
+    3,
   );
 });
 test("state roundtrip and corruption validation", async () => {

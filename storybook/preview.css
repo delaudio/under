@@ -1,0 +1,4 @@
+body { background: #17171d; }
+.terminal-frame { font-family: 'JetBrains Mono', monospace; font-size: 15px; line-height: 20px; font-variant-ligatures: none; background: #101014; overflow: hidden; }
+.terminal-line { height: 20px; display: flex; white-space: pre; }
+.terminal-line span { display: inline-block; flex-shrink: 0; white-space: pre; overflow: hidden; }

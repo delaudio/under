@@ -39,3 +39,23 @@ jobs:
       - run: yazi --version && hunk --version && codex --version && claude --version && opencode --version
       - run: bun run check
       - run: ./under --help && ./under --version
+  visual:
+    # PNG baselines are Chromium/macOS. Native PTY checks also run on Linux above.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install chromium
+      - run: bun run typecheck:storybook
+      - run: bun run test:storybook:visual
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tui-visual-results
+          path: |
+            playwright-report/
+            test-results/
+            storybook-static/

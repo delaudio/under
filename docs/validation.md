@@ -12,6 +12,38 @@ startup prompt and end-to-end child-to-editor opening of a filename with spaces,
 quotes and Unicode at a specified line. Three cell-frame layout fixtures are
 stored under `docs/previews`; regenerate them with `bun run visual`.
 
+## Current working-tree validation
+
+The first-use changes add a launcher-level PTY test using an isolated normal
+Neovim `init.lua`, file opening from the browser, Unicode insertion/saving,
+menu input ownership and return to editing after dismissal. The test does not
+use `--clean` or disable automatic initial editor launch. Directory containment,
+wrapped-menu mouse positions and unavailable agent actions have native tests.
+
+On 2026-10-12, local macOS arm64 verification with Bun 1.4.3 and Neovim
+0.12.5 passed strict checking, all 34 native tests with no skips, Storybook
+checking/build, and all 32 browser checks (31 screenshot comparisons and one
+catalog/inventory check). Baselines were inspected before comparison. A separate
+local probe confirmed startup and input with the owner's ordinary Neovim
+configuration without saving file changes. The in-band resize-report adapter has
+a captured regression: bypassing it leaves Neovim at its previous dimensions
+after a pane resize (expected 55×26, observed 70×34). This is local evidence; the
+new CI workflow has not yet run for these uncommitted changes.
+
+The browser visual gate renders the production App and terminal panes into
+31 native frames and compares Chromium element screenshots. See
+[coverage and limitations](../storybook/COVERAGE.md). The visual CI job uses
+macOS baselines; the native CI job retains Linux and macOS tool checks.
+
+Cleanup also handles a denied group probe only after a reaped leader and a
+process-table check prove the PTY group is absent; live-group permission errors
+remain failures, with explicit regression tests.
+
+The installed Bun 1.3.8 crashed during the original socket/PTY test run. The
+launcher now enforces Bun >=1.4.3 before importing the TUI. Passing tests with
+an isolated Neovim configuration establish the default workflow, not every
+personal plugin/theme configuration or authenticated provider session.
+
 ## Automated gates
 
 `bun run check` runs strict TypeScript checking and Bun tests. GitHub Actions
@@ -27,13 +59,17 @@ Coverage includes:
 - actual Neovim RPC, unsaved-buffer refusal and opening another file;
 - real application rendering and keyboard interaction at 120×30, 80×24 and 50×15;
 - real Yazi/Hunk interactive screens, resize and Hunk watch refresh;
+- themed Yazi configuration isolation and opening through the existing editor bridge;
+- working/staged Review tab reuse, retained modified buffers, missing-tool/non-Git feedback;
+- cursor-only updates, background output, menu ownership, clipping and resize with live panes;
+- actual Neovim geometry after startup/resize/zoom and arrow-key scrolling with relative numbers, cursorline and Unicode;
 - native Codex/Claude/OpenCode CLI execution in embedded PTYs.
 
 The agent smoke tests use `--help`; authenticated model conversations and approval
 prompts are a manual validation, not something these tests claim to verify.
 
-The authoring container permits PTYs but denies Unix socket listeners. Local
-checks use `UNDER_NO_SOCKETS=1` and report socket-dependent tests as skipped.
+The original authoring container permitted PTYs but denied Unix socket listeners.
+Checks in that environment used `UNDER_NO_SOCKETS=1` and report socket-dependent tests as skipped.
 That flag is never used by the CI gate. Missing tools also produce explicit
 test skips locally; CI installs them before running tests.
 

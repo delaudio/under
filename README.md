@@ -6,7 +6,9 @@ Under runs the tools you already use in real terminal panes. It adds project
 workspaces, tabs, splits, a command palette and connections between those tools.
 Neovim remains your editor, with your configuration and plugins.
 
-![Under workspace layout](docs/previews/layout-120.svg)
+![Under workspace layout](visual/baselines/darwin/wide.png)
+
+The preview uses deterministic editor output; the application runs your real Neovim.
 
 ## Install
 
@@ -37,6 +39,28 @@ under --help
 
 ## Workflow
 
+The default workspace shows project files on the left, Neovim in the centre,
+and an agent chooser on the right. Click a file to open it in the existing
+editor. Click **Start agent** to choose a provider and launch its native CLI.
+
+The top **File / View / Review / Tools / Agent / Help** menus work with the mouse.
+Press **Ctrl-G**, then **m** for keyboard menus: left/right switch menus,
+up/down select, Enter activates, and Escape closes the menu. Unavailable
+actions explain what needs installing or which operation is pending.
+
+Press **Ctrl-G**, then **f** to focus native Yazi. Your theme, folder icons,
+plugins and key bindings are retained. Its normal edit opener opens the file in
+Under's existing Neovim. Yazi shows only the current directory, without parent or
+preview columns. Use its native right/l and left/h keys to enter and leave
+directories; this is directory navigation, not an expandable tree.
+If Yazi is missing or stopped, a basic file list provides
+arrows/j/k, Enter to open, left for parent, and r to refresh; that fallback omits
+`.git`, `.under` and `node_modules`.
+
+Open **Review → Working tree diff** or **Review → Staged diff** to start Hunk in
+a dedicated tab. **Ctrl-G r** and **Ctrl-G s** do the same. Repeated actions reuse
+the matching tab; the editor and its unsaved buffers stay alive.
+
 Press **Ctrl-G**, then **p** to open the command palette. Start an agent, add a
 Yazi or Hunk pane, create a tab, open a workspace, or run a configured task.
 The palette can be filtered by typing. Escape closes it.
@@ -45,6 +69,10 @@ The palette can be filtered by typing. Escape closes it.
 | ------------------- | -------------------------------------------------------- |
 | Ctrl-G              | Enter navigation; press again to send one literal Ctrl-G |
 | Escape              | Return to the focused terminal                           |
+| m                   | Top menu                                                 |
+| f                   | Focus native Yazi or the fallback file list                |
+| r / s               | Working tree / staged diff in Hunk                        |
+| l                   | Redraw all terminal panes                                 |
 | p                   | Command palette                                          |
 | Tab / j / k         | Cycle panes                                              |
 | t / w               | Next tab / workspace                                     |
@@ -59,21 +87,27 @@ commands require navigation mode. A modal owns input until it is dismissed.
 
 ### Layouts
 
-- **code:** Neovim and an agent placeholder.
+- **code:** project files, Neovim and an agent chooser.
 - **review:** Hunk and an agent placeholder.
 - **run:** a shell placeholder.
 
-Start placeholders explicitly through the palette. New tabs do not execute
+Start stopped tools explicitly through the menus or palette; Enter also starts
+a focused stopped pane. Selecting a provider reuses the idle chat pane. New tabs do not execute
 commands. Tabs and hidden panes preserve running processes and terminal state.
 Use splits, zoom, resizing and “Move pane to new tab” to change the layout.
-On narrow terminals Under shows the focused pane; the other processes continue.
+At 80 columns or wider the file panel appears beside the editor/chat split.
+Below 80 columns it collapses; Ctrl-G f reveals it. Below 60 columns, or in a
+very short terminal, Under shows the focused tool; Ctrl-G Tab switches tools.
+The other processes continue. View toggles files/chat and zoom without stopping
+them. Native Yazi owns Escape; use Ctrl-G Tab to return to the editor.
 
 ### Files and review
 
-The palette opens files in the existing Neovim instance. In Yazi, open a text
-file with its normal editor action: the per-workspace `$EDITOR` bridge opens it
-in Under's Neovim. User Yazi configuration is preserved; custom opener rules
-that ignore `$EDITOR` may need a user-supplied rule.
+The palette opens files in the existing Neovim instance. Yazi uses a temporary
+configuration directory retaining the user theme, plugins, flavors and keymap.
+Its manager ratio is set to `[0, 1, 0]` and its `edit` opener uses Under's editor bridge. Other openers and
+file-type rules remain configured by the user. No global Yazi files are changed.
+Folder icons depend on the font selected in your host terminal.
 
 Hunk uses `hunk diff --watch`, or `hunk diff --staged --watch` for staged review.
 Its editor action uses the same bridge, including the selected line. Deleted
@@ -128,7 +162,8 @@ arguments and environment.
 
 Tasks and agent profiles start only on an explicit action. Inspect project
 configuration before starting its commands. A project override of the Neovim
-command also disables automatic editor launch. Use `--no-editor` to start with
+command also disables automatic editor launch. A project Yazi override requires
+starting Yazi explicitly from Tools; the fallback file list remains available. Use `--no-editor` to start with
 all tools stopped.
 
 ## Restore and shutdown
@@ -160,6 +195,21 @@ bun install --frozen-lockfile
 bun run check
 bun run start --no-editor
 ```
+
+For the browser UI catalog and screenshot checks (Node 22+ and Playwright's
+Chromium are development prerequisites):
+
+```sh
+bunx playwright install chromium
+bun run storybook                 # http://127.0.0.1:6006
+bun run typecheck:storybook
+bun run test:storybook:visual      # compare reviewed macOS baselines
+bun run build-storybook
+```
+
+See [visual coverage and baseline review](storybook/COVERAGE.md).
+If the launcher reports an older Bun, run `bun upgrade` before starting Under;
+it refuses unsupported versions instead of risking terminal/runtime crashes.
 
 See [architecture](docs/architecture.md), [validation](docs/validation.md) and
 [the backlog](https://github.com/delaudio/under/issues).

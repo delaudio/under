@@ -31,6 +31,16 @@ export function preset(name: "code" | "review" | "run", agent = "codex"): Tab {
           createPane(name === "code" ? "nvim" : "hunk"),
           createPane("agent", agent),
         ];
+  if (name === "code") panes.push(createPane("yazi"));
+  const main: Layout =
+    panes.length === 1
+      ? leaf(panes[0]!)
+      : {
+          axis: "row",
+          ratio: 0.65,
+          first: leaf(panes[0]!),
+          second: leaf(panes[1]!),
+        };
   return {
     id: uid(),
     name,
@@ -38,14 +48,9 @@ export function preset(name: "code" | "review" | "run", agent = "codex"): Tab {
     focused: panes[0]!.id,
     zoom: false,
     layout:
-      panes.length === 1
-        ? leaf(panes[0]!)
-        : {
-            axis: "row",
-            ratio: 0.65,
-            first: leaf(panes[0]!),
-            second: leaf(panes[1]!),
-          },
+      name === "code"
+        ? { axis: "row", ratio: 0.26, first: leaf(panes[2]!), second: main }
+        : main,
   };
 }
 export function createWorkspace(
