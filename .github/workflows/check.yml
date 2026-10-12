@@ -1,0 +1,30 @@
+name: Check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Install Neovim
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install neovim
+          else
+            curl -fsSL https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-x86_64.tar.gz | tar -xz
+            echo "$PWD/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+          fi
+      - run: bun install --frozen-lockfile
+      - run: nvim --version
+      - run: bun run check
+      - run: ./under --help && ./under --version
