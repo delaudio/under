@@ -1,5 +1,17 @@
 # Validation
 
+## Recorded evidence
+
+On 2026-10-12, revision `006c71413df29f5ac804c25edb614145b4f82fd7`
+passed strict TypeScript checking and **all 22 tests with no skips** on both
+Linux x86_64 and macOS arm64. The run also passed executable launcher help and
+version checks. [CI evidence](https://github.com/delaudio/under/actions/runs/38259665664).
+
+The suite includes full-app SIGTERM cleanup, cancellation during a real Neovim
+startup prompt and end-to-end child-to-editor opening of a filename with spaces,
+quotes and Unicode at a specified line. Three cell-frame layout fixtures are
+stored under `docs/previews`; regenerate them with `bun run visual`.
+
 ## Automated gates
 
 `bun run check` runs strict TypeScript checking and Bun tests. GitHub Actions

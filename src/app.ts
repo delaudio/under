@@ -207,7 +207,7 @@ export class App {
         t.panes.some((p) => p.id === e.pane.id),
       )!.id;
       this.tab().focused = e.pane.id;
-      this.input.mode = "terminal";
+      if (!this.modal) this.input.mode = "terminal";
       this.draw();
     });
     this.bridges.set(w.id, b);
@@ -765,7 +765,8 @@ export class App {
     };
     const layout =
       t.zoom || width < 60 || height < 12 ? { pane: t.focused } : t.layout;
-    const cells = rectangles(layout, rect);
+    let cells = rectangles(layout, rect);
+    if (!cells.has(t.focused)) cells = new Map([[t.focused, rect]]);
     const allPaneIds = new Set(
       this.state.workspaces.flatMap((w) =>
         w.tabs.flatMap((t) => t.panes.map((p) => p.id)),
