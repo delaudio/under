@@ -66,8 +66,13 @@ context collection or transcript persistence is introduced.
 ## Yazi and Hunk
 
 A private editor wrapper and socket are scoped to each workspace. `$EDITOR` and
-`$VISUAL` are changed only in Under's child environment. Yazi's user-configured
-openers remain intact. The wrapper supports Hunk's Vim-style `+line` argument.
+`$VISUAL` are changed only in Under's child environment. Yazi receives a temporary `YAZI_CONFIG_HOME`: theme, plugins, flavors, keymap
+and init are linked from the original config; parsed TOML sets the manager ratio
+to `[0, 1, 0]` (one current-directory column) and changes `opener.edit`.
+Its command uses `%s` or `"$@"` to match the installed Yazi's opener placeholder
+syntax. Other opener definitions and file rules are preserved. Temporary
+directories are removed during shutdown. The wrapper supports Hunk's Vim-style
+`+line` argument.
 
 Hunk 0.23.0 publishes `HunkDiffView` under `hunkdiff/opentui` with an MIT license,
 but that package uses a different OpenTUI version from Under. The first release
@@ -89,3 +94,38 @@ structured agent adapters require independent lifecycle contracts.
 - [Neovim RPC/API](https://neovim.io/doc/user/api/)
 - [Hunk](https://github.com/modem-dev/hunk)
 - [Yazi opener configuration](https://yazi-rs.github.io/docs/configuration/yazi/#opener)
+
+## Visible workspace and preview boundary
+
+The default code tab contains native Yazi on the left, Neovim in the centre and
+an agent chooser on the right. Yazi uses native input and the workspace editor
+bridge. A per-workspace FileBrowser provides a basic fallback when Yazi is not
+running. Hidden/collapsed panels keep their processes; narrow terminals can reveal
+files or cycle tool panes. Review actions start/reuse separate working-tree and
+staged Hunk tabs after checking for a Git working tree.
+
+OpenTUI 0.6.1's embedded VT reports support for in-band resize events (mode 2048)
+but does not emit those events when it resizes. Neovim then ignores SIGWINCH and
+keeps its previous dimensions, causing wrapping and scrolling to corrupt the
+visible pane. The response adapter in `src/terminal.ts` reports mode 2048 as
+unsupported so tools use normal PTY resize signals. It changes only generated
+terminal responses; user input and child output pass through unchanged. See
+[Neovim's resize-mode and SIGWINCH handling](https://github.com/neovim/neovim/blob/master/src/nvim/tui/tui.c).
+
+Ctrl-G l still offers an explicit full repaint through the pinned renderer's
+compatibility shim. Ordinary frames use incremental rendering. Cursor mapping
+remains owned by the focused visible terminal. The real Neovim regression test
+checks its actual rows/columns, arrow-key scrolling, visible line order, cursor
+position, background output and resize/zoom transitions.
+
+Top menus and the palette share the same commands and availability checks.
+Menu cell positions are recalculated after resize and wrapping. Dropdowns and
+forms own input until dismissed. Project-defined commands and agent launches
+continue to require an explicit action; restore launches no processes.
+
+The Storybook generator injects synthetic configuration/files and read-only
+PTY/editor adapters into the production App. OpenTUI captures cell colors,
+attributes and widths. Browser Storybook only imports those generated frames,
+never Bun terminal code. Playwright checks the catalog, frame/story mapping,
+reviewed baseline inventory and exact terminal element screenshots. Real tool
+startup and editing are established by the separate PTY tests.

@@ -122,3 +122,44 @@ test("full CLI responds to SIGTERM, saves metadata and restores the terminal", a
     await rm(dir, { recursive: true });
   }
 }, 10_000);
+
+test("cleanup accepts a denied probe only when an exited PTY group is proven absent", async () => {
+  const host = new PtyHost(
+    { argv: [process.execPath, "-e", "process.exit(0)"] },
+    process.cwd(),
+  );
+  await host.process.exited;
+  const originalKill = process.kill;
+  try {
+    process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+      if (pid === -host.process.pid)
+        throw Object.assign(new Error("Denied probe"), { code: "EPERM" });
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+    await host.close();
+    expect(host.phase).toBe("exited");
+  } finally {
+    process.kill = originalKill;
+  }
+});
+
+test("cleanup never treats denied signals against a live PTY as successful", async () => {
+  const host = new PtyHost(
+    { argv: [process.execPath, "-e", "setInterval(()=>{},1000)"] },
+    process.cwd(),
+  );
+  const originalKill = process.kill;
+  try {
+    process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+      if (pid === -host.process.pid)
+        throw Object.assign(new Error("Denied signal"), { code: "EPERM" });
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+    await expect(host.close()).rejects.toThrow("Denied signal");
+    expect(host.phase).toBe("error");
+  } finally {
+    process.kill = originalKill;
+    originalKill(-host.process.pid, "SIGKILL");
+    await host.process.exited;
+  }
+});

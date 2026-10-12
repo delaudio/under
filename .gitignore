@@ -2,3 +2,7 @@ node_modules/
 .under/
 dist/
 *.log
+storybook/generated/
+storybook-static/
+test-results/
+playwright-report/

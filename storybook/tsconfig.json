@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "types": ["bun"], "resolveJsonModule": true, "lib": ["ESNext", "DOM"] },
+  "include": ["./**/*.ts", "../.storybook/**/*.ts", "../visual/**/*.ts", "../playwright.config.ts"]
+}

@@ -76,6 +76,8 @@ for (const tool of ["yazi", "hunk"]) {
         await setup.flush();
         expect(host.phase).toBe("running");
         if (tool === "hunk") {
+          // Restore space for the complete changed line before asserting its text.
+          view.width = 100; view.height = 30; await setup.flush();
           await writeFile(
             join(dir, "sample.ts"),
             "const under = 'refreshed';\n",
