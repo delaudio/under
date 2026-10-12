@@ -60,17 +60,21 @@ export class Rpc {
     args: unknown[] = [],
     timeout = 5000,
   ): Promise<T> {
-    if (this.closed)
-      return Promise.reject(new Error("Neovim RPC disconnected"));
-    const promise = new Promise<T>((resolve, reject) => {
-      const id = this.next++;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`RPC timeout: ${method}`));
-      }, timeout);
-      this.pending.set(id, { resolve: (v) => resolve(v as T), reject, timer });
-      this.socket.write(encode([0, id, method, args]));
-    });
+    const promise = this.closed
+      ? Promise.reject<T>(new Error("Neovim RPC disconnected"))
+      : new Promise<T>((resolve, reject) => {
+          const id = this.next++;
+          const timer = setTimeout(() => {
+            this.pending.delete(id);
+            reject(new Error(`RPC timeout: ${method}`));
+          }, timeout);
+          this.pending.set(id, {
+            resolve: (v) => resolve(v as T),
+            reject,
+            timer,
+          });
+          this.socket.write(encode([0, id, method, args]));
+        });
     // A disconnect or timeout during teardown can reject a request whose caller
     // has already moved on. Observe it here so awaiting callers still receive the
     // error without the teardown race surfacing as an unhandled rejection.

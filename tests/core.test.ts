@@ -192,3 +192,14 @@ test.skipIf(process.env.UNDER_NO_SOCKETS === "1")(
     }
   },
 );
+test("the lockfile resolves packages from the public registry only", async () => {
+  const lock = await Bun.file(new URL("../bun.lock", import.meta.url)).text();
+  const hosts = [
+    ...new Set(
+      [...lock.matchAll(/https?:\/\/([^/"\s]+)/g)].map((match) => match[1]!),
+    ),
+  ];
+  // A private or mirror registry can leave absolute URLs here; they must never
+  // be published, so any host other than the public npm registry is a failure.
+  expect(hosts.filter((host) => host !== "registry.npmjs.org")).toEqual([]);
+});
