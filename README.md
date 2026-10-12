@@ -41,18 +41,18 @@ Press **Ctrl-G**, then **p** to open the command palette. Start an agent, add a
 Yazi or Hunk pane, create a tab, open a workspace, or run a configured task.
 The palette can be filtered by typing. Escape closes it.
 
-| Navigation mode key | Action |
-| --- | --- |
-| Ctrl-G | Enter navigation; press again to send one literal Ctrl-G |
-| Escape | Return to the focused terminal |
-| p | Command palette |
-| Tab / j / k | Cycle panes |
-| t / w | Next tab / workspace |
-| z | Toggle focused-pane zoom |
-| [ / ] | Shrink / grow focused split |
-| b | Toggle workspace sidebar |
-| ? | Shortcut help |
-| q | Save layout and quit after checking unsaved buffers |
+| Navigation mode key | Action                                                   |
+| ------------------- | -------------------------------------------------------- |
+| Ctrl-G              | Enter navigation; press again to send one literal Ctrl-G |
+| Escape              | Return to the focused terminal                           |
+| p                   | Command palette                                          |
+| Tab / j / k         | Cycle panes                                              |
+| t / w               | Next tab / workspace                                     |
+| z                   | Toggle focused-pane zoom                                 |
+| [ / ]               | Shrink / grow focused split                              |
+| b                   | Toggle workspace sidebar                                 |
+| ?                   | Shortcut help                                            |
+| q                   | Save layout and quit after checking unsaved buffers      |
 
 Ordinary keys, paste and mouse input belong to the focused tool. Application
 commands require navigation mode. A modal owns input until it is dismissed.

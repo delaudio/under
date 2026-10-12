@@ -15,17 +15,17 @@ download or package name is advertised.
 
 ## Modules
 
-| Module | Responsibility |
-| --- | --- |
-| `model.ts` | Workspace/tab/pane metadata and split geometry |
-| `pty.ts` | Owned process group, PTY input/output, resize and cleanup |
-| `editor.ts` | Neovim startup, MessagePack-RPC and buffer operations |
-| `input.ts` | Explicit terminal/application/modal input ownership |
-| `app.ts` | Terminal views, command routing and UI lifecycle |
-| `bridge.ts` | Private per-workspace socket for opening editor locations |
-| `context.ts` / `git.ts` | Explicit live-buffer and disk-diff context |
-| `config.ts` / `state.ts` | Validated settings and metadata persistence |
-| `main.ts` | CLI parsing and runtime startup |
+| Module                   | Responsibility                                            |
+| ------------------------ | --------------------------------------------------------- |
+| `model.ts`               | Workspace/tab/pane metadata and split geometry            |
+| `pty.ts`                 | Owned process group, PTY input/output, resize and cleanup |
+| `editor.ts`              | Neovim startup, MessagePack-RPC and buffer operations     |
+| `input.ts`               | Explicit terminal/application/modal input ownership       |
+| `app.ts`                 | Terminal views, command routing and UI lifecycle          |
+| `bridge.ts`              | Private per-workspace socket for opening editor locations |
+| `context.ts` / `git.ts`  | Explicit live-buffer and disk-diff context                |
+| `config.ts` / `state.ts` | Validated settings and metadata persistence               |
+| `main.ts`                | CLI parsing and runtime startup                           |
 
 ## Terminal integration
 
