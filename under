@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+UNDER_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$UNDER_SOURCE" ]]; do
+  UNDER_DIR="$(cd -- "$(dirname -- "$UNDER_SOURCE")" && pwd)"
+  UNDER_SOURCE="$(readlink -- "$UNDER_SOURCE")"
+  [[ "$UNDER_SOURCE" == /* ]] || UNDER_SOURCE="$UNDER_DIR/$UNDER_SOURCE"
+done
+ROOT="$(cd -- "$(dirname -- "$UNDER_SOURCE")" && pwd)"
+if ! command -v bun >/dev/null 2>&1; then
+  printf '%s\n' 'Under requires Bun >= 1.4.3. Install Bun, then run bun install --frozen-lockfile in the Under checkout.' >&2
+  exit 1
+fi
+exec bun "$ROOT/src/main.ts" "$@"
