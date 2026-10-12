@@ -62,7 +62,7 @@ export class Rpc {
   ): Promise<T> {
     if (this.closed)
       return Promise.reject(new Error("Neovim RPC disconnected"));
-    return new Promise((resolve, reject) => {
+    const promise = new Promise<T>((resolve, reject) => {
       const id = this.next++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -71,6 +71,14 @@ export class Rpc {
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject, timer });
       this.socket.write(encode([0, id, method, args]));
     });
+    // A disconnect or timeout during teardown can reject a request whose caller
+    // has already moved on. Observe it here so awaiting callers still receive the
+    // error without the teardown race surfacing as an unhandled rejection.
+    void promise.catch(() => {});
+    return promise;
+  }
+  get disposed() {
+    return this.closed;
   }
   dispose(error = new Error("Neovim RPC disconnected")) {
     if (this.closed) return;
@@ -217,10 +225,20 @@ export class Editor {
     } catch (e) {
       refusal = e;
     }
-    const end = Date.now() + 1500;
-    while (this.host.phase === "running" && Date.now() < end)
+    // Neovim closes its editor socket as it exits. Bun's PTY exit event is a
+    // secondary signal that can trail that close under load, so wait for either
+    // and fall back to the process table before reporting a refusal. dispose()
+    // reaps any group that lingers after the socket closes.
+    const end = Date.now() + 5000;
+    while (
+      this.host.phase === "running" &&
+      !this.rpc?.disposed &&
+      Date.now() < end
+    ) {
       await Bun.sleep(20);
-    if (this.host.phase === "running")
+      if (Date.now() > end - 3000) await this.host.confirmExit();
+    }
+    if (this.host.phase === "running" && !this.rpc?.disposed)
       throw refusal ?? new Error("Neovim refused to quit");
   }
   async dispose() {

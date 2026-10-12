@@ -2,7 +2,36 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Editor } from "../src/editor.ts";
+import { once } from "node:events";
+import { createConnection, createServer, type AddressInfo } from "node:net";
+import { Editor, Rpc } from "../src/editor.ts";
+
+test("RPC teardown never surfaces an abandoned request as an unhandled rejection", async () => {
+  const server = createServer(() => {});
+  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+  const socket = createConnection({
+    host: "127.0.0.1",
+    port: (server.address() as AddressInfo).port,
+  });
+  await once(socket, "connect");
+  const rpc = new Rpc(socket);
+  // Intentionally not awaited: a disconnect can reject this after the caller
+  // has already moved on, which is exactly the scenario that fails on CI.
+  const abandoned = rpc.call("never-answered");
+  void abandoned;
+  const unhandled: unknown[] = [];
+  const onUnhandled = (error: unknown) => unhandled.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    rpc.dispose();
+    await Bun.sleep(25);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    socket.destroy();
+    server.close();
+  }
+  expect(unhandled).toEqual([]);
+});
 
 const nvim = process.env.UNDER_TEST_NVIM || Bun.which("nvim");
 test.skipIf(!nvim || process.env.UNDER_NO_SOCKETS === "1")(
@@ -39,6 +68,10 @@ test.skipIf(!nvim || process.env.UNDER_NO_SOCKETS === "1")(
       expect(await editor.modified()).toContain(path);
       await editor.rpc!.call("nvim_command", ["wa"]);
       await editor.quit();
+      // Neovim closes its editor socket on quit; the Bun PTY exit event is a
+      // secondary signal, so assert the durable outcome after disposal instead.
+      expect(editor.rpc!.disposed).toBe(true);
+      await editor.dispose();
       expect(editor.host.phase).toBe("exited");
     } finally {
       await editor.dispose();

@@ -73,6 +73,23 @@ export class PtyHost {
       /* exited */
     }
   }
+  /** Bun's PTY exit event can be delayed or missed; confirm with the process table. */
+  async confirmExit(): Promise<boolean> {
+    if (this.phase !== "running") return true;
+    if (this.exitCode !== null) {
+      this.phase = "exited";
+      return true;
+    }
+    const probe = Bun.spawnSync({
+      cmd: ["ps", "-o", "stat=", "-p", String(this.process.pid)],
+    });
+    const state = probe.stdout.toString().trim();
+    if (probe.exitCode !== 0 || state === "" || state.startsWith("Z")) {
+      this.phase = "exited";
+      return true;
+    }
+    return false;
+  }
   close(): Promise<void> {
     return (this.closing ??= this.cleanup());
   }
