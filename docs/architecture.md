@@ -69,8 +69,10 @@ A private editor wrapper and socket are scoped to each workspace. `$EDITOR` and
 `$VISUAL` are changed only in Under's child environment. Yazi receives a temporary `YAZI_CONFIG_HOME`: theme, plugins, flavors, keymap
 and init are linked from the original config; parsed TOML sets the manager ratio
 to `[0, 1, 0]` (one current-directory column) and changes `opener.edit`.
-Other opener definitions and file rules are preserved. Temporary directories are
-removed during shutdown. The wrapper supports Hunk's Vim-style `+line` argument.
+Its command uses `%s` or `"$@"` to match the installed Yazi's opener placeholder
+syntax. Other opener definitions and file rules are preserved. Temporary
+directories are removed during shutdown. The wrapper supports Hunk's Vim-style
+`+line` argument.
 
 Hunk 0.23.0 publishes `HunkDiffView` under `hunkdiff/opentui` with an MIT license,
 but that package uses a different OpenTUI version from Under. The first release

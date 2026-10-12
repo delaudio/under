@@ -10,7 +10,7 @@ import { stat, writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { basename, resolve, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { yaziConfig } from "./yazi.ts";
+import { yaziConfig, yaziVersion } from "./yazi.ts";
 import { repaint } from "./repaint.ts";
 import { terminalResponse } from "./terminal.ts";
 import { FileBrowser, displayName, type FileEntry } from "./files.ts";
@@ -476,6 +476,7 @@ export class App {
       const directory = await yaziConfig(
         join(this.helperDir, "nvim"),
         profile.env,
+        yaziVersion(profile.argv[0]!),
       );
       this.yaziDirectories.add(directory);
       command.env = { ...command.env, YAZI_CONFIG_HOME: directory };

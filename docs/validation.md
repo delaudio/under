@@ -21,7 +21,7 @@ use `--clean` or disable automatic initial editor launch. Directory containment,
 wrapped-menu mouse positions and unavailable agent actions have native tests.
 
 On 2026-10-12, local macOS arm64 verification with Bun 1.4.3 and Neovim
-0.12.5 passed strict checking, all 34 native tests with no skips, Storybook
+0.12.5 passed strict checking, all 35 native tests with no skips, Storybook
 checking/build, and all 32 browser checks (31 screenshot comparisons and one
 catalog/inventory check). Baselines were inspected before comparison. A separate
 local probe confirmed startup and input with the owner's ordinary Neovim

@@ -10,10 +10,40 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 
+/** Yazi before 25.12.29 expands shell-style "$@" opener arguments; later
+ * releases replace that scheme with %s shell formatting. Emit the token the
+ * installed Yazi understands so the editor bridge receives the selected path.
+ * Unknown versions assume the current %s formatting.
+ */
+export function yaziOpenerCommand(editor: string, version: string): string {
+  const quoted = `'${editor.replaceAll("'", "'\\''")}'`;
+  const match = /(\d+)\.(\d+)/.exec(version);
+  const legacy =
+    !!match &&
+    (Number(match[1]) < 25 ||
+      (Number(match[1]) === 25 && Number(match[2]) < 12));
+  return legacy ? `${quoted} "$@"` : `${quoted} %s`;
+}
+
+/** Read the installed Yazi version; an empty result selects current formatting. */
+export function yaziVersion(binary: string): string {
+  try {
+    const probe = Bun.spawnSync({
+      cmd: [binary, "--version"],
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    return new TextDecoder().decode(probe.stdout);
+  } catch {
+    return "";
+  }
+}
+
 /** Preserve native configuration with an IDE sidebar layout and editor bridge. */
 export async function yaziConfig(
   editor: string,
   env: Record<string, string> = {},
+  version = "",
 ) {
   const source = resolve(
     env.YAZI_CONFIG_HOME ||
@@ -63,7 +93,7 @@ export async function yaziConfig(
       ...(opener as Record<string, any>),
       edit: [
         {
-          run: `'${editor.replaceAll("'", "'\\''")}' %s`,
+          run: yaziOpenerCommand(editor, version),
           desc: "Open in Under Neovim",
           block: true,
           for: "unix",

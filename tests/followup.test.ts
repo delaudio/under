@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { parse } from "smol-toml";
 import { App, type PaneHost } from "../src/app.ts";
 import { defaults } from "../src/config.ts";
-import { yaziConfig } from "../src/yazi.ts";
+import { yaziConfig, yaziOpenerCommand } from "../src/yazi.ts";
 import { menuSlots } from "../src/menu.ts";
 
 test("a late Yazi launch transfers fallback file focus and receives native keys", async () => {
@@ -52,6 +52,13 @@ test("a late Yazi launch transfers fallback file focus and receives native keys"
   }
 });
 
+test("Yazi opener command uses the placeholder syntax of the installed version", () => {
+  const legacy = yaziOpenerCommand("/opt/helper ' è/nvim", "Version: 25.5.31");
+  expect(legacy).toBe("'/opt/helper '\\'' è/nvim' \"$@\"");
+  for (const version of ["Version: 25.12.29", "Version: 26.9.1", ""])
+    expect(yaziOpenerCommand("/bin/helper", version)).toBe("'/bin/helper' %s");
+});
+
 test("Yazi overlay preserves configuration with a single-column layout and editor bridge", async () => {
   const root = await mkdtemp(join(tmpdir(), "under-yazi-test-"));
   let overlay = "";
@@ -65,16 +72,18 @@ test("Yazi overlay preserves configuration with a single-column layout and edito
     );
     await writeFile(join(root, "keymap.toml"), "# custom bindings\n");
     await mkdir(join(root, "plugins"));
-    overlay = await yaziConfig("/tmp/helper ' è/nvim", {
-      YAZI_CONFIG_HOME: root,
-    });
+    overlay = await yaziConfig(
+      "/tmp/helper ' è/nvim",
+      { YAZI_CONFIG_HOME: root },
+      "Version: 25.5.31",
+    );
     const result = parse(await readFile(join(overlay, "yazi.toml"), "utf8"));
     expect(result.mgr).toEqual({ show_hidden: true, ratio: [0, 1, 0] });
     expect(result.open).toEqual(parse(original).open);
     expect((result.opener as any).play).toEqual(
       (parse(original).opener as any).play,
     );
-    expect((result.opener as any).edit[0].run).toContain("%s");
+    expect((result.opener as any).edit[0].run).toContain('"$@"');
     expect(await realpath(join(overlay, "plugins"))).toBe(
       await realpath(join(root, "plugins")),
     );
