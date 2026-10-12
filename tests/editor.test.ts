@@ -55,12 +55,14 @@ test.skipIf(!nvim || process.env.UNDER_NO_SOCKETS === "1")(
     await writeFile(init, "vim.fn.input('Under startup prompt: ')\n");
     const editor = await Editor.launch({ argv: [nvim!, "-u", init] }, dir);
     editor.host.attach(() => {});
-    const ready = editor.ready();
-    const rejection = expect(ready).rejects.toThrow();
+    const ready = editor.ready().then(
+      () => ({ rejected: false }),
+      () => ({ rejected: true }),
+    );
     try {
       await Bun.sleep(100);
       editor.abortInitialization();
-      await rejection;
+      expect((await ready).rejected).toBe(true);
     } finally {
       await editor.dispose();
       await rm(dir, { recursive: true, force: true });

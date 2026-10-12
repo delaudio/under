@@ -98,6 +98,7 @@ export class Editor {
   private token = randomUUID();
   private disposed = false;
   private initialized = false;
+  private connecting?: Socket;
   private constructor(
     readonly host: PtyHost,
     private dir: string,
@@ -134,15 +135,28 @@ export class Editor {
       try {
         const socket = await new Promise<Socket>((ok, fail) => {
           const s = createConnection(this.socketPath);
+          this.connecting = s;
+          const timer = setTimeout(
+            () => s.destroy(new Error("RPC connection timed out")),
+            1000,
+          );
           s.once("connect", () => {
+            clearTimeout(timer);
+            this.connecting = undefined;
             s.removeListener("error", fail);
             ok(s);
           });
           s.once("error", (e) => {
+            clearTimeout(timer);
+            this.connecting = undefined;
             s.destroy();
             fail(e);
           });
         });
+        if (this.disposed) {
+          socket.destroy();
+          throw new Error("Neovim initialization cancelled");
+        }
         this.rpc = new Rpc(socket);
         const token = await this.rpc.call("nvim_eval", ["$UNDER_EDITOR_TOKEN"]);
         if (token !== this.token)
@@ -167,6 +181,7 @@ export class Editor {
   abortInitialization() {
     if (this.initialized) return;
     this.disposed = true;
+    this.connecting?.destroy(new Error("Neovim initialization cancelled"));
     this.rpc?.dispose(new Error("Neovim initialization cancelled"));
   }
   private client() {
