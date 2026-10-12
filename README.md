@@ -6,6 +6,8 @@ Under runs the tools you already use in real terminal panes. It adds project
 workspaces, tabs, splits, a command palette and connections between those tools.
 Neovim remains your editor, with your configuration and plugins.
 
+![Under workspace layout](docs/previews/layout-120.svg)
+
 ## Install
 
 Under is an early source distribution for macOS and Linux. Install

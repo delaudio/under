@@ -31,7 +31,7 @@ export async function main(args = process.argv.slice(2)) {
   app = new App(renderer, cwd, state || undefined);
   if (signal) { await app.shutdown(true); return; }
   if (!args.includes("--restore") && !args.includes("--no-editor")) {
-    try { await app.startInitial(); } catch (e) { console.error(String(e)); /* keep the usable shell UI */ }
+    try { await app.startInitial(); } catch (e) { app.report(String(e)); }
   }
 }
 if (import.meta.main) main().catch(e => { console.error(`under: ${String(e)}`); process.exitCode = 1; });

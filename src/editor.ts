@@ -44,7 +44,7 @@ export class Rpc {
     this.pending.clear(); this.socket.destroy();
   }
 }
-export type EditorSnapshot = { path: string; lines: string[]; cursor: [number, number]; changedtick: number; modified: boolean; selection: string[]; diagnostics: unknown[] };
+export type EditorSnapshot = { path: string; lines: string[]; cursor: [number, number]; changedtick: number; modified: boolean; selection: string[]; diagnostics: unknown[]; selectionRange?: {start: [number,number]; finish: [number,number]} };
 export class Editor {
   rpc?: Rpc; private token = randomUUID(); private disposed = false;
   private constructor(readonly host: PtyHost, private dir: string, private socketPath: string) {}
@@ -82,7 +82,7 @@ export class Editor {
     await this.client().call("nvim_exec_lua", [`local p,l,c=...; local old=vim.api.nvim_get_current_buf(); local opt=vim.bo[old].bufhidden; if vim.bo[old].modified then vim.bo[old].bufhidden='hide' end; local b=vim.fn.bufadd(p); vim.fn.bufload(b); local ok,err=pcall(vim.api.nvim_set_current_buf,b); if vim.api.nvim_buf_is_valid(old) then vim.bo[old].bufhidden=opt end; if not ok then error(err) end; local n=vim.api.nvim_buf_line_count(b); local row=math.max(1,math.min(l,n)); local text=vim.api.nvim_buf_get_lines(b,row-1,row,false)[1] or ''; vim.api.nvim_win_set_cursor(0,{row,math.max(0,math.min(c,#text))}); return b`, [resolve(path), line, column]]);
   }
   snapshot(): Promise<EditorSnapshot> {
-    return this.client().call("nvim_exec_lua", [`local b=vim.api.nvim_get_current_buf(); local cur=vim.api.nvim_win_get_cursor(0); local mode=vim.fn.mode(); local sel={}; if mode=='v' or mode=='V' or mode==string.char(22) then local anchor=vim.fn.getpos('v'); local a=math.min(anchor[2],cur[1]); local z=math.max(anchor[2],cur[1]); sel=vim.api.nvim_buf_get_lines(b,a-1,z,false); if mode=='v' and #sel>0 then local start=anchor[2]<cur[1] and anchor[3] or (anchor[2]>cur[1] and cur[2]+1 or math.min(anchor[3],cur[2]+1)); local finish=anchor[2]<cur[1] and cur[2]+1 or (anchor[2]>cur[1] and anchor[3] or math.max(anchor[3],cur[2]+1)); if #sel==1 then sel[1]=string.sub(sel[1],start,finish) else sel[1]=string.sub(sel[1],start); sel[#sel]=string.sub(sel[#sel],1,finish) end end end; return {path=vim.api.nvim_buf_get_name(b),lines=vim.api.nvim_buf_get_lines(b,0,-1,false),cursor=cur,changedtick=vim.api.nvim_buf_get_changedtick(b),modified=vim.bo[b].modified,selection=sel,diagnostics=vim.diagnostic.get(b)}`, []]);
+    return this.client().call("nvim_exec_lua", [`local b=vim.api.nvim_get_current_buf(); local cur=vim.api.nvim_win_get_cursor(0); local mode=vim.fn.mode(); local sel={}; local range={}; if mode=='v' or mode=='V' or mode==string.char(22) then local anchor=vim.fn.getpos('v'); local finish=vim.fn.getcurpos(); sel=vim.fn.getregion(anchor,finish,{type=mode,exclusive=vim.o.selection=='exclusive'}); range={start={anchor[2],anchor[3]-1},finish={finish[2],finish[3]-1}} end; return {path=vim.api.nvim_buf_get_name(b),lines=vim.api.nvim_buf_get_lines(b,0,-1,false),cursor=cur,changedtick=vim.api.nvim_buf_get_changedtick(b),modified=vim.bo[b].modified,selection=sel,selectionRange=range,diagnostics=vim.diagnostic.get(b)}`, []]);
   }
   async modified(): Promise<string[]> {
     return this.client().call("nvim_exec_lua", ["local out={}; for _,b in ipairs(vim.api.nvim_list_bufs()) do if vim.bo[b].modified then table.insert(out,vim.api.nvim_buf_get_name(b)) end end; return out", []]);

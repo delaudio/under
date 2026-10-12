@@ -20,6 +20,7 @@ type Modal = { kind: "palette" | "input" | "preview" | "help"; title: string; te
 export class App {
   state: State; input: InputOwner; config: Config;
   private runtimes = new Map<string, Runtime>(); private bridges = new Map<string, FileBridge>();
+  private placeholders = new Map<string, { frame: BoxRenderable; text: TextRenderable }>();
   private header: TextRenderable; private footer: TextRenderable; private sidebar: TextRenderable;
   private overlay: BoxRenderable; private overlayText: TextRenderable;
   private modal?: Modal; private side = true; private message = "Press Ctrl-G, then p for commands";
@@ -45,6 +46,7 @@ export class App {
     this.timer = setInterval(this.draw, 300); this.draw();
   }
   workspace() { return this.state.workspaces.find(w => w.id === this.state.active)!; }
+  report(message: string) { this.message = message; this.draw(); }
   tab() { const w = this.workspace(); return w.tabs.find(t => t.id === w.activeTab)!; }
   private activeRuntime() { return this.runtimes.get(this.tab().focused); }
   private editor(w: Workspace = this.workspace()) { for (const t of w.tabs) for (const p of t.panes) { const r = this.runtimes.get(p.id); if (r?.editor) return { pane: p, runtime: r }; } throw new Error("Start a Neovim pane in this workspace first"); }
@@ -127,6 +129,18 @@ export class App {
       ...Object.keys(this.config.tasks).map(k => cmd(`Run task: ${k}${this.config.tasks[k]?.shell ? " (shell command)" : ""}`, () => this.add("task", k))),
       ...(["code", "review", "run"] as const).map(name => cmd(`New ${name} tab`, () => { const t = preset(name); this.workspace().tabs.push(t); this.workspace().activeTab = t.id; this.draw(); })),
       cmd("Next tab", () => this.cycleTab()), cmd("Next workspace", () => this.cycleWorkspace()),
+      cmd("Close current tab", async () => {
+        const w = this.workspace(), t = this.tab(); if (w.tabs.length === 1) throw new Error("Use Close workspace or Quit for the last tab");
+        await this.checkEditors(t.panes); for (const p of t.panes) await this.stop(p);
+        w.tabs = w.tabs.filter(x => x.id !== t.id); w.activeTab = w.tabs[0]!.id; this.draw();
+      }),
+      cmd("Close current workspace", async () => {
+        if (this.state.workspaces.length === 1) throw new Error("Use Quit for the last workspace");
+        const w = this.workspace(); const panes = w.tabs.flatMap(t => t.panes);
+        await this.checkEditors(panes); for (const p of panes) await this.stop(p);
+        await this.bridges.get(w.id)?.close(); this.bridges.delete(w.id);
+        this.state.workspaces = this.state.workspaces.filter(x => x.id !== w.id); this.state.active = this.state.workspaces[0]!.id; this.draw();
+      }),
       cmd("Open workspace", () => this.ask("Directory path", async text => { const path = resolve(this.workspace().path, text); if (!(await stat(path)).isDirectory()) throw new Error("Not a directory"); const w = createWorkspace(path); this.state.workspaces.push(w); this.state.active = w.id; this.config = loadConfig(path).config; this.draw(); })),
       cmd("Move pane to new tab", () => { const t = this.tab(); if (t.panes.length < 2) throw new Error("Split first"); const p = t.panes.find(p => p.id === t.focused)!; t.layout = remove(t.layout, p.id)!; t.panes = t.panes.filter(x => x.id !== p.id); t.focused = t.panes[0]!.id; const n = preset("run"); n.panes = [p]; n.layout = leaf(p); n.focused = p.id; n.name = p.profile; this.workspace().tabs.push(n); this.workspace().activeTab = n.id; this.draw(); }),
       cmd("Close focused pane", async () => { const t = this.tab(); if (t.panes.length === 1) throw new Error("Use Quit to close the last pane"); const p = t.panes.find(p => p.id === t.focused)!; await this.stop(p); t.panes = t.panes.filter(x => x.id !== p.id); t.layout = remove(t.layout, p.id)!; t.focused = t.panes[0]!.id; this.draw(); }),
@@ -141,6 +155,12 @@ export class App {
     ];
   }
   private ask(title: string, submit: Modal["submit"]) { this.openModal({ kind: "input", title, text: "", index: 0, submit, cancelMode: "app" }); }
+  private async checkEditors(panes: Pane[]) {
+    for (const pane of panes) {
+      const r = this.runtimes.get(pane.id);
+      if (r?.editor && r.host.phase === "running" && (await r.editor.modified()).length) throw new Error("Save modified buffers before closing this layout");
+    }
+  }
   private help() { this.openModal({ kind: "help", title: "Under shortcuts", text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\np: command palette  Tab/j/k: cycle panes\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`, index: 0, cancelMode: "app" }); }
   private async preview(kind: ContextKind | "diff") {
     const editor = this.editor().runtime.editor!; const snapshot = await editor.snapshot(); const cwd = this.workspace().path;
@@ -164,7 +184,7 @@ export class App {
   private cycleTab() { const w = this.workspace(); w.activeTab = w.tabs[(w.tabs.findIndex(t => t.id === w.activeTab) + 1) % w.tabs.length]!.id; this.draw(); }
   private cycleWorkspace() { this.state.active = this.state.workspaces[(this.state.workspaces.findIndex(w => w.id === this.state.active) + 1) % this.state.workspaces.length]!.id; this.config = loadConfig(this.workspace().path).config; this.draw(); }
   private run(action: Command["action"]) {
-    if (this.shuttingDown || this.actionPending) { this.message = "An action is already pending"; return; }
+    if (this.shuttingDown || this.actionPending || this.starts.size) { this.message = "An action is already pending"; return; }
     this.actionPending = true;
     Promise.resolve().then(action).catch(e => { this.message = String(e); this.draw(); }).finally(() => { this.actionPending = false; });
   }
@@ -221,22 +241,36 @@ export class App {
     const rect = { x: side, y: 1, width: Math.max(1, width - side), height: Math.max(1, height - 2) };
     const layout = t.zoom || width < 60 || height < 12 ? { pane: t.focused } : t.layout;
     const cells = rectangles(layout, rect);
+    const allPaneIds = new Set(this.state.workspaces.flatMap(w => w.tabs.flatMap(t => t.panes.map(p => p.id))));
+    for (const [id, placeholder] of this.placeholders) if (!allPaneIds.has(id)) { placeholder.frame.destroyRecursively(); this.placeholders.delete(id); }
+    for (const placeholder of this.placeholders.values()) placeholder.frame.visible = false;
+    for (const [id, cell] of cells) {
+      if (this.runtimes.has(id)) continue;
+      let placeholder = this.placeholders.get(id);
+      if (!placeholder) {
+        const frame = new BoxRenderable(this.renderer, { id: `placeholder-${id}`, position: "absolute", border: true, borderColor: this.config.accent });
+        const text = new TextRenderable(this.renderer, { id: `placeholder-text-${id}`, fg: this.config.foreground });
+        frame.add(text); this.renderer.root.add(frame); placeholder = { frame, text }; this.placeholders.set(id, placeholder);
+      }
+      placeholder.frame.visible = true; placeholder.frame.left = cell.x; placeholder.frame.top = cell.y; placeholder.frame.width = cell.width; placeholder.frame.height = cell.height;
+      const p = t.panes.find(p => p.id === id)!;
+      placeholder.text.content = `${p.profile} · not started\n\n${this.input.prefix}, p\nStart focused pane`;
+      placeholder.frame.onMouseDown = () => { if (!this.modal) { t.focused = id; this.input.mode = "app"; this.draw(); } };
+    }
     for (const [id, r] of this.runtimes) {
       const cell = cells.get(id); r.frame.visible = !!cell;
       if (!cell) { r.view.blur(); continue; }
       r.frame.left = cell.x; r.frame.top = cell.y; r.frame.width = cell.width; r.frame.height = cell.height;
+      r.frame.borderColor = id === t.focused ? this.config.accent : "#3a3a44";
       const pane = t.panes.find(p => p.id === id)!;
       r.title.content = `${pane.profile} [${r.host.phase}${r.host.exitCode !== null ? `:${r.host.exitCode}` : ""}]`;
       if (id === t.focused && this.input.mode === "terminal") r.view.focus(); else r.view.blur();
     }
     // A dormant pane is visible as a placeholder, without executing anything.
-    const focused = this.runtimes.get(t.focused);
-    if (!focused && !this.modal) { this.overlay.visible = true; this.overlay.left = side; this.overlay.top = 2; this.overlay.width = Math.max(1, width - side); this.overlay.height = 5;
-      this.overlayText.content = `${t.panes.find(p => p.id === t.focused)?.profile} is not started.\n${this.input.prefix}, p → Start focused pane`; }
-    else this.overlay.visible = !!this.modal;
+    this.overlay.visible = !!this.modal;
     if (this.modal) {
       const m = this.modal; const rows = Math.max(1, height - 7);
-      this.overlay.left = Math.min(3, Math.max(0, width - 8)); this.overlay.top = 2; this.overlay.width = Math.max(1, width - 6); this.overlay.height = Math.max(3, height - 4);
+      this.overlay.left = 0; this.overlay.top = 0; this.overlay.width = width; this.overlay.height = height;
       const lines = m.kind === "palette" ? this.choices().map((c, i) => `${i === m.index ? "›" : " "} ${c.name}`) : m.text.split("\n");
       const start = m.kind === "palette" ? Math.max(0, m.index - rows + 1) : m.index;
       this.overlayText.content = `${m.title}\n${m.kind === "palette" || m.kind === "input" ? "> " + m.text + "\n" : ""}${lines.slice(start, start + rows).join("\n")}\nEsc cancel · ↑↓ scroll · Enter select`;
@@ -247,12 +281,16 @@ export class App {
     this.shuttingDown = true;
     this.shutdownPromise = (async () => {
       await Promise.allSettled(this.starts.values());
+      try { await saveState(statePath(), this.state); } catch (e) {
+        // A persistence failure must never prevent forced resource cleanup.
+        if (!force) throw e;
+        this.message = `Layout could not be saved: ${String(e)}`;
+      }
       if (!force) {
         for (const r of this.runtimes.values()) if (r.editor && r.host.phase === "running") { const modified = await r.editor.modified(); if (modified.length) throw new Error(`Save modified buffers before quitting: ${modified.join(", ")}`); }
         // Quit editors before touching any other tools. A refused quit preserves agents.
         for (const r of this.runtimes.values()) if (r.editor && r.host.phase === "running") await r.editor.quit();
       }
-      await saveState(statePath(), this.state);
       const errors: unknown[] = [];
       for (const r of this.runtimes.values()) { try { r.editor ? await r.editor.dispose() : await r.host.close(); } catch (e) { errors.push(e); } }
       for (const b of this.bridges.values()) await b.close();

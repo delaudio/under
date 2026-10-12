@@ -9,6 +9,9 @@ import { InputOwner } from "../src/input.ts";
 import { contextText, sameSnapshot } from "../src/context.ts";
 import { FileBridge, openRemote } from "../src/bridge.ts";
 import { main } from "../src/main.ts";
+import { fileDiff } from "../src/git.ts";
+import { createServer, createConnection, type Socket } from "node:net";
+import { Rpc } from "../src/editor.ts";
 
 test("configuration validates commands, prefix and unknown keys", () => {
   expect(validatePatch({ profiles: { example: { argv: ["echo", "a ' $() unicode è"] } } }).profiles!.example!.argv[1]).toContain("$()");
@@ -64,3 +67,21 @@ test.skipIf(process.env.UNDER_NO_SOCKETS === "1")("editor bridge isolates two in
   } finally { await a.close(); await b.close(); }
 });
 test("CLI invalid options reject without starting tools", async () => { await expect(main(["--invalid"])).rejects.toThrow("Unknown option"); });
+test("bounded Git context scopes paths and distinguishes staged changes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "under-git-")); const path = join(dir, "quote ' è.ts");
+  try {
+    Bun.spawnSync({ cmd: ["git", "init"], cwd: dir }); await writeFile(path, "first\n"); Bun.spawnSync({ cmd: ["git", "add", "--", path], cwd: dir });
+    expect(await fileDiff(dir, path, true)).toContain("+first"); await writeFile(path, "second\n"); expect(await fileDiff(dir, path)).toContain("+second");
+    await expect(fileDiff(dir, "/other/project.ts")).rejects.toThrow("outside");
+  } finally { await rm(dir, { recursive: true }); }
+});
+test.skipIf(process.env.UNDER_NO_SOCKETS === "1")("RPC times out pending requests and rejects immediately on disposal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "under-rpc-")); const path = join(dir, "silent.sock");
+  let peer: Socket | undefined; const server = createServer(s => { peer = s; s.on("data", () => {}); });
+  await new Promise<void>(ok => server.listen(path, ok));
+  const socket = await new Promise<Socket>(ok => { const s = createConnection(path, () => ok(s)); }); const rpc = new Rpc(socket);
+  try {
+    await expect(rpc.call("silent", [], 25)).rejects.toThrow("RPC timeout");
+    const pending = rpc.call("pending", [], 5000); rpc.dispose(); await expect(pending).rejects.toThrow("disconnected");
+  } finally { rpc.dispose(); peer?.destroy(); await new Promise<void>(ok => server.close(() => ok())); await rm(dir, { recursive: true }); }
+});

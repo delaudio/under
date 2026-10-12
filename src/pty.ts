@@ -18,7 +18,7 @@ export class PtyHost {
     } });
     try {
       this.process = Bun.spawn({ cmd: profile.argv, cwd, detached: true, terminal: this.terminal,
-        env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", ...profile.env } });
+        env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", ...profile.env, PWD: cwd } });
     } catch (e) { this.terminal.close(); throw e; }
     void this.process.exited.then(code => { this.exitCode = code; if (this.phase !== "error") this.phase = "exited"; });
   }
