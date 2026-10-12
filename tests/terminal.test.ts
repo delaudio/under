@@ -7,6 +7,26 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+test("exit confirmation distinguishes a running child from a stopped one", async () => {
+  const stopped = new PtyHost(
+    { argv: [process.execPath, "-e", "process.exit(0)"] },
+    process.cwd(),
+  );
+  await stopped.process.exited;
+  expect(await stopped.confirmExit()).toBe(true);
+  expect(stopped.phase).toBe("exited");
+  const live = new PtyHost(
+    { argv: [process.execPath, "-e", "setInterval(()=>{},1000)"] },
+    process.cwd(),
+  );
+  try {
+    expect(await live.confirmExit()).toBe(false);
+    expect(live.phase).toBe("running");
+  } finally {
+    await live.close();
+  }
+});
+
 test("real PTY renders VT output, replies to terminal queries and resizes", async () => {
   const fixture = `process.stdout.write('\\x1b[?1049h\\x1b[2J\\x1b[H\\x1b[38;2;120;200;80mhello è界\\x1b[0m\\r\\n\\x1b[?2004h\\x1b[6n');process.stdin.setRawMode(true);process.stdin.on('data',d=>{if(d.toString().includes('R'))process.stdout.write('REPLY\\r\\n');if(d.toString().includes('ping'))process.stdout.write('PONG\\r\\n')});process.on('SIGWINCH',()=>process.stdout.write('SIZE:'+process.stdout.columns+'x'+process.stdout.rows+'\\r\\n'));setInterval(()=>{},1000)`;
   const setup = await createTestRenderer({ width: 80, height: 24 });
