@@ -36,7 +36,10 @@ test.skipIf(process.env.UNDER_NO_SOCKETS === "1" || !Bun.which("nvim"))(
       await Bun.sleep(40);
       setup.mockInput.pressEscape();
       await Bun.sleep(40);
-      await app.shutdown(true);
+      const normalQuit = app.shutdown();
+      const forcedQuit = app.shutdown(true);
+      await expect(normalQuit).rejects.toThrow("Save modified buffers");
+      await forcedQuit;
     } finally {
       await app.shutdown(true).catch(() => {});
       await setup.dispose();

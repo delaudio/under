@@ -850,8 +850,11 @@ export class App {
       this.overlayText.content = `${m.title}\n${m.kind === "palette" || m.kind === "input" ? "> " + m.text + "\n" : ""}${lines.slice(start, start + rows).join("\n")}\nEsc cancel · ↑↓ scroll · Enter select`;
     }
   };
-  async shutdown(force = false) {
-    if (this.shutdownPromise) return this.shutdownPromise;
+  async shutdown(force = false): Promise<void> {
+    if (this.shutdownPromise)
+      return force
+        ? this.shutdownPromise.catch(() => this.shutdown(true))
+        : this.shutdownPromise;
     this.shuttingDown = true;
     for (const id of this.starts.keys())
       this.runtimes.get(id)?.editor?.abortInitialization();
