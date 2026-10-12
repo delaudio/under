@@ -23,6 +23,7 @@ export class App {
   private overlay: BoxRenderable; private overlayText: TextRenderable;
   private modal?: Modal; private side = true; private message = "Press Ctrl-G, then p for commands";
   private shutdownPromise?: Promise<void>; private shuttingDown = false; private disposed = false;
+  private starts = new Map<string, Promise<void>>(); private actionPending = false;
   private timer: ReturnType<typeof setInterval>; private helperDir = "";
   constructor(readonly renderer: CliRenderer, cwd: string, state?: State) {
     const loaded = loadConfig(cwd); this.config = loaded.config; this.input = new InputOwner(this.config.prefix);
@@ -33,7 +34,8 @@ export class App {
     this.footer = new TextRenderable(renderer, { id: "footer", position: "absolute", left: 0, height: 1, fg: this.config.foreground });
     this.sidebar = new TextRenderable(renderer, { id: "sidebar", position: "absolute", left: 0, top: 1, fg: this.config.foreground,
       onMouseDown: () => { this.input.mode = "app"; this.activeRuntime()?.view.blur(); this.draw(); } });
-    this.overlay = new BoxRenderable(renderer, { id: "overlay", position: "absolute", border: true, backgroundColor: this.config.background, zIndex: 100, visible: false });
+    this.overlay = new BoxRenderable(renderer, { id: "overlay", position: "absolute", border: true, backgroundColor: this.config.background, zIndex: 100, visible: false,
+      onMouseDown: event => { event.stopPropagation(); }, onMouseScroll: event => { if (this.modal) { this.modal.index = Math.max(0, this.modal.index + (event.scroll?.direction === "up" ? -1 : 1)); this.draw(); } event.stopPropagation(); } });
     this.overlayText = new TextRenderable(renderer, { id: "overlay-text", fg: this.config.foreground }); this.overlay.add(this.overlayText);
     for (const v of [this.header, this.footer, this.sidebar, this.overlay]) renderer.root.add(v);
     renderer.keyInput.on("keypress", this.onKey); renderer.keyInput.on("paste", this.onPaste);
@@ -58,9 +60,13 @@ export class App {
     if (this.helperDir) return;
     this.helperDir = await mkdtemp(join(tmpdir(), "under-helper-"));
     const script = `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' '${fileURLToPath(new URL("./main.ts", import.meta.url)).replaceAll("'", "'\\''")}' open "$@"\n`;
-    await writeFile(join(this.helperDir, "editor"), script); await chmod(join(this.helperDir, "editor"), 0o700);
+    await writeFile(join(this.helperDir, "nvim"), script); await chmod(join(this.helperDir, "nvim"), 0o700);
   }
-  async start(pane: Pane) {
+  start(pane: Pane): Promise<void> {
+    if (this.starts.has(pane.id)) return Promise.reject(new Error("Pane is starting"));
+    const pending = this.startPane(pane).finally(() => this.starts.delete(pane.id)); this.starts.set(pane.id, pending); return pending;
+  }
+  private async startPane(pane: Pane) {
     if (this.shuttingDown) throw new Error("Under is shutting down");
     if (this.runtimes.has(pane.id)) throw new Error("Pane already started; stop it before restarting");
     const w = this.workspace(); const { config, warnings } = loadConfig(w.path); this.config = config;
@@ -69,19 +75,23 @@ export class App {
     if (!Bun.which(profile.argv[0]!)) throw new Error(`Missing executable ${profile.argv[0]}; install it or configure its argv`);
     if (!(await stat(w.path)).isDirectory()) throw new Error(`Not a directory: ${w.path}`);
     await this.helpers(); const bridge = await this.bridge(w);
-    let command: Profile = { ...profile, env: { ...profile.env, UNDER_OPEN_SOCKET: bridge.path, EDITOR: join(this.helperDir, "editor"), VISUAL: join(this.helperDir, "editor") } };
+    if (this.shuttingDown) throw new Error("Launch cancelled during shutdown");
+    let command: Profile = { ...profile, env: { ...profile.env, UNDER_OPEN_SOCKET: bridge.path, EDITOR: join(this.helperDir, "nvim"), VISUAL: join(this.helperDir, "nvim") } };
     if (pane.kind === "task" && config.tasks[pane.profile]?.shell) command = { ...command, argv: [process.env.SHELL || "/bin/sh", "-lc", profile.argv.join(" ")] };
     const frame = new BoxRenderable(this.renderer, { id: `frame-${pane.id}`, position: "absolute", border: true, borderColor: config.accent });
     const title = new TextRenderable(this.renderer, { id: `title-${pane.id}`, height: 1, fg: config.accent });
     let host: PtyHost; let editor: Editor | undefined;
     try { if (pane.kind === "nvim") { editor = await Editor.launch(command, w.path); host = editor.host; } else host = new PtyHost(command, w.path); }
     catch (e) { frame.destroy(); title.destroy(); throw e; }
+    if (this.shuttingDown) { editor ? await editor.dispose() : await host.close(); frame.destroy(); title.destroy(); throw new Error("Launch cancelled during shutdown"); }
     const view = new EmbeddedTerminalRenderable(this.renderer, { id: pane.id, width: "100%", flexGrow: 1, maxScrollback: 5000,
       onData: bytes => host.write(bytes), onTerminalResize: (cols, rows) => host.resize(cols, rows),
       onMouseDown: () => { if (!this.modal) { this.tab().focused = pane.id; this.input.mode = "terminal"; this.draw(); } } });
     frame.add(title); frame.add(view); this.renderer.root.add(frame);
     this.runtimes.set(pane.id, { host, editor, frame, title, view }); host.attach(bytes => view.write(bytes)); this.draw();
-    if (editor) await editor.ready();
+    if (editor) {
+      try { await editor.ready(); } catch (e) { await editor.dispose(); this.runtimes.delete(pane.id); frame.destroyRecursively(); throw e; }
+    }
     this.message = warnings.join(" | ") || `Started ${pane.profile}`;
   }
   private async stop(pane: Pane) {
@@ -138,8 +148,21 @@ export class App {
   private choices() { return this.commands().filter(c => c.name.toLowerCase().includes(this.modal?.text.toLowerCase() ?? "")); }
   private cycleTab() { const w = this.workspace(); w.activeTab = w.tabs[(w.tabs.findIndex(t => t.id === w.activeTab) + 1) % w.tabs.length]!.id; this.draw(); }
   private cycleWorkspace() { this.state.active = this.state.workspaces[(this.state.workspaces.findIndex(w => w.id === this.state.active) + 1) % this.state.workspaces.length]!.id; this.config = loadConfig(this.workspace().path).config; this.draw(); }
-  private run(action: Command["action"]) { if (this.shuttingDown) return; Promise.resolve().then(action).catch(e => { this.message = String(e); this.draw(); }); }
-  private onPaste = (event: PasteEvent) => { if (this.input.mode !== "terminal") { event.preventDefault(); event.stopPropagation(); } };
+  private run(action: Command["action"]) {
+    if (this.shuttingDown || this.actionPending) { this.message = "An action is already pending"; return; }
+    this.actionPending = true;
+    Promise.resolve().then(action).catch(e => { this.message = String(e); this.draw(); }).finally(() => { this.actionPending = false; });
+  }
+  private onPaste = (event: PasteEvent) => {
+    if (this.input.mode !== "terminal") {
+      event.preventDefault(); event.stopPropagation();
+      if (this.modal?.kind === "input" || this.modal?.kind === "palette") {
+        const text = new TextDecoder().decode(event.bytes).replace(/[\x00-\x1f\x7f]/g, "");
+        if (Buffer.byteLength(this.modal.text + text) <= 16384) this.modal.text += text;
+        this.draw();
+      }
+    }
+  };
   private onKey = (key: KeyEvent) => {
     const decision = this.input.handle(key);
     if (decision === "forward") return;
@@ -156,7 +179,7 @@ export class App {
         m.index = Math.max(0, Math.min(m.index + delta, m.kind === "palette" ? Math.max(0, this.choices().length - 1) : Math.max(0, m.text.split("\n").length - 1)));
       } else if (m.kind === "input" || m.kind === "palette") {
         if (key.name === "backspace") m.text = [...m.text].slice(0, -1).join("");
-        else if (!key.ctrl && !key.meta && key.sequence && [...key.sequence].every(c => c >= " " && c !== "\x7f")) m.text += key.sequence;
+        else if (!key.ctrl && !key.meta && key.sequence && m.text.length < 16384 && [...key.sequence].every(c => c >= " " && c !== "\x7f")) m.text += key.sequence;
         m.index = 0;
       }
       this.draw(); return;
@@ -208,6 +231,7 @@ export class App {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
     this.shutdownPromise = (async () => {
+      await Promise.allSettled(this.starts.values());
       if (!force) {
         for (const r of this.runtimes.values()) if (r.editor && r.host.phase === "running") { const modified = await r.editor.modified(); if (modified.length) throw new Error(`Save modified buffers before quitting: ${modified.join(", ")}`); }
         // Quit editors before touching any other tools. A refused quit preserves agents.

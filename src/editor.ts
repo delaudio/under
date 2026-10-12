@@ -90,10 +90,11 @@ export class Editor {
   async quit() {
     const modified = await this.modified(); if (modified.length) throw new Error(`Save modified buffers first: ${modified.join(", ")}`);
     // A disconnect is expected only if the normal quit really exits the child.
-    try { await this.client().call("nvim_command", ["qa"]); } catch (e) { await Bun.sleep(50); if (this.host.phase === "running") throw e; }
+    let refusal: unknown;
+    try { await this.client().call("nvim_command", ["qa"]); } catch (e) { refusal = e; }
     const end = Date.now() + 1500;
     while (this.host.phase === "running" && Date.now() < end) await Bun.sleep(20);
-    if (this.host.phase === "running") throw new Error("Neovim refused to quit");
+    if (this.host.phase === "running") throw refusal ?? new Error("Neovim refused to quit");
   }
   async dispose() { this.disposed = true; this.rpc?.dispose(); await this.host.close(); await rm(this.dir, { recursive: true, force: true }); }
 }

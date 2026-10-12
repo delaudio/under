@@ -1,12 +1,12 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Editor } from "../src/editor.ts";
 
 const nvim = process.env.UNDER_TEST_NVIM || Bun.which("nvim");
 test.skipIf(!nvim || process.env.UNDER_NO_SOCKETS === "1")("real Neovim PTY/RPC preserves modified buffers, paths and safe quit", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "under-editor-test-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "under-editor-test-")));
   const editor = await Editor.launch({ argv: [nvim!, "--clean"] }, dir);
   editor.host.attach(() => {});
   try {

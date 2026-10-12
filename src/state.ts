@@ -29,7 +29,8 @@ export function validateState(v: any): State {
   }
   if (!v.workspaces.some((w: any) => w.id === v.active)) throw new Error("Invalid active workspace");
   // Whitelist metadata, stripping unknown properties rather than retaining secrets.
-  return { version: 1, active: v.active, workspaces: v.workspaces.map((w: any) => ({ id: w.id, path: w.path, activeTab: w.activeTab, tabs: w.tabs.map((t: any) => ({ id: t.id, name: t.name, focused: t.focused, zoom: t.zoom, layout: t.layout, panes: t.panes.map((p: any) => ({ id: p.id, kind: p.kind, profile: p.profile })) })) })) };
+  const cleanLayout = (l: Layout): Layout => "pane" in l ? { pane: l.pane } : { axis: l.axis, ratio: l.ratio, first: cleanLayout(l.first), second: cleanLayout(l.second) };
+  return { version: 1, active: v.active, workspaces: v.workspaces.map((w: any) => ({ id: w.id, path: w.path, activeTab: w.activeTab, tabs: w.tabs.map((t: any) => ({ id: t.id, name: t.name, focused: t.focused, zoom: t.zoom, layout: cleanLayout(t.layout), panes: t.panes.map((p: any) => ({ id: p.id, kind: p.kind, profile: p.profile })) })) })) };
 }
 export async function loadState(path: string): Promise<State | null> {
   try { return validateState(JSON.parse(await readFile(path, "utf8"))); }

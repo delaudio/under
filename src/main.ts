@@ -10,10 +10,12 @@ export async function main(args = process.argv.slice(2)) {
   if (args.includes("--help") || args.includes("-h")) { console.log(HELP); return; }
   if (args.includes("--version")) { console.log("0.1.0"); return; }
   if (args[0] === "open") {
-    const path = args[1]; if (!path) throw new Error("under open requires a filename");
+    let path = args[1]; let editorLine = 1;
+    if (path && /^\+\d+$/.test(path)) { editorLine = Number(path.slice(1)); path = args[2]; }
+    if (!path) throw new Error("under open requires a filename");
     const socket = process.env.UNDER_OPEN_SOCKET; if (!socket) throw new Error("No Under editor bridge; run this from a tool pane");
     const number = (flag: string, fallback: number, min: number) => { const i = args.indexOf(flag); const n = i < 0 ? fallback : Number(args[i + 1]); if (!Number.isInteger(n) || n < min) throw new Error(`Invalid ${flag}`); return n; };
-    await openRemote(socket, resolve(path), number("--line", 1, 1), number("--column", 0, 0)); return;
+    await openRemote(socket, resolve(path), number("--line", editorLine, 1), number("--column", 0, 0)); return;
   }
   for (const arg of args) if (arg.startsWith("-") && !["--restore", "--no-editor"].includes(arg)) throw new Error(`Unknown option: ${arg}`);
   const paths = args.filter(x => !x.startsWith("-")); if (paths.length > 1) throw new Error("Expected one directory");
