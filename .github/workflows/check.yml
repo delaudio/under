@@ -25,6 +25,17 @@ jobs:
             echo "$PWD/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
           fi
       - run: bun install --frozen-lockfile
+      - name: Install tool integration fixtures
+        run: |
+          bun install --global hunkdiff@0.23.0 @openai/codex@0.162.1 @anthropic-ai/claude-code@2.1.296 opencode-ai@1.19.0
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install yazi
+          else
+            curl -fsSL https://github.com/sxyazi/yazi/releases/download/v25.5.31/yazi-x86_64-unknown-linux-musl.zip -o yazi.zip
+            unzip -q yazi.zip
+            echo "$PWD/yazi-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+          fi
       - run: nvim --version
+      - run: yazi --version && hunk --version && codex --version && claude --version && opencode --version
       - run: bun run check
       - run: ./under --help && ./under --version

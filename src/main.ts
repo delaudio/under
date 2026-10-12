@@ -30,7 +30,7 @@ export async function main(args = process.argv.slice(2)) {
   const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
   app = new App(renderer, cwd, state || undefined);
   if (signal) { await app.shutdown(true); return; }
-  if (!state && !args.includes("--no-editor")) {
+  if (!args.includes("--restore") && !args.includes("--no-editor")) {
     try { await app.startInitial(); } catch (e) { console.error(String(e)); /* keep the usable shell UI */ }
   }
 }

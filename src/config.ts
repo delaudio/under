@@ -12,6 +12,7 @@ export type Config = {
 export const defaults: Config = {
   prefix: "ctrl+g", preset: "code", background: "#101014", foreground: "#dddde5", accent: "#b7a7e8",
   profiles: { nvim: { argv: ["nvim"] }, yazi: { argv: ["yazi"] }, hunk: { argv: ["hunk", "diff", "--watch"] },
+    "hunk-staged": { argv: ["hunk", "diff", "--staged", "--watch"] },
     codex: { argv: ["codex"] }, claude: { argv: ["claude"] }, opencode: { argv: ["opencode"] },
     shell: { argv: [process.env.SHELL || "/bin/sh"] } }, tasks: {},
 };

@@ -1,5 +1,5 @@
 import { BoxRenderable, TextRenderable, EmbeddedTerminalRenderable, type CliRenderer, type KeyEvent, type PasteEvent } from "@opentui/core";
-import { stat, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { stat, writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { basename, resolve, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { InputOwner } from "./input.ts";
 import { PtyHost } from "./pty.ts";
 import { Editor, type EditorSnapshot } from "./editor.ts";
 import { FileBridge } from "./bridge.ts";
+import { fileDiff } from "./git.ts";
 import { contextText, sameSnapshot, type ContextKind } from "./context.ts";
 import { loadConfig, statePath, type Config, type Profile } from "./config.ts";
 import { saveState, type State } from "./state.ts";
@@ -27,6 +28,7 @@ export class App {
   private timer: ReturnType<typeof setInterval>; private helperDir = "";
   constructor(readonly renderer: CliRenderer, cwd: string, state?: State) {
     const loaded = loadConfig(cwd); this.config = loaded.config; this.input = new InputOwner(this.config.prefix);
+    renderer.setBackgroundColor(this.config.background);
     this.message = loaded.warnings.join(" | ") || this.message;
     const w = createWorkspace(cwd, this.config.preset);
     this.state = state ?? { version: 1, workspaces: [w], active: w.id };
@@ -46,7 +48,14 @@ export class App {
   tab() { const w = this.workspace(); return w.tabs.find(t => t.id === w.activeTab)!; }
   private activeRuntime() { return this.runtimes.get(this.tab().focused); }
   private editor(w: Workspace = this.workspace()) { for (const t of w.tabs) for (const p of t.panes) { const r = this.runtimes.get(p.id); if (r?.editor) return { pane: p, runtime: r }; } throw new Error("Start a Neovim pane in this workspace first"); }
-  async startInitial() { const p = this.tab().panes.find(p => p.kind === "nvim"); if (p) await this.start(p); }
+  async startInitial() {
+    // Project-local command overrides always require the explicit Start action.
+    try {
+      const project = JSON.parse(await readFile(join(this.workspace().path, ".under.json"), "utf8"));
+      if (project.profiles?.nvim) { this.message = "Project overrides Neovim: inspect .under.json, then Start focused pane"; this.draw(); return; }
+    } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") { this.message = "Inspect invalid project config before starting tools"; return; } }
+    const p = this.tab().panes.find(p => p.kind === "nvim"); if (p) await this.start(p);
+  }
   private async bridge(w: Workspace) {
     let b = this.bridges.get(w.id); if (b) return b;
     b = new FileBridge(); await b.start(async (path, line, column) => {
@@ -112,8 +121,9 @@ export class App {
       cmd("Restart focused pane", async () => { const p = this.tab().panes.find(p => p.id === this.tab().focused)!; await this.stop(p); await this.start(p); }),
       cmd("Open file in Neovim", () => this.ask("File path", async text => { await this.editor().runtime.editor!.openFile(resolve(this.workspace().path, text)); })),
       cmd("Add Neovim", () => this.add("nvim")), cmd("Add Yazi", () => this.add("yazi")), cmd("Add Hunk live review", () => this.add("hunk")),
+      cmd("Add Hunk staged review", () => this.add("hunk", "hunk-staged")),
       cmd("Split right with shell", () => this.add("shell")), cmd("Split below with shell", () => this.add("shell", "shell", "column")),
-      ...Object.keys(this.config.profiles).filter(k => !["nvim", "yazi", "hunk", "shell"].includes(k)).map(k => cmd(`Start agent: ${k}`, () => this.add("agent", k))),
+      ...Object.keys(this.config.profiles).filter(k => !["nvim", "yazi", "hunk", "hunk-staged", "shell"].includes(k)).map(k => cmd(`Start agent: ${k}`, () => this.add("agent", k))),
       ...Object.keys(this.config.tasks).map(k => cmd(`Run task: ${k}${this.config.tasks[k]?.shell ? " (shell command)" : ""}`, () => this.add("task", k))),
       ...(["code", "review", "run"] as const).map(name => cmd(`New ${name} tab`, () => { const t = preset(name); this.workspace().tabs.push(t); this.workspace().activeTab = t.id; this.draw(); })),
       cmd("Next tab", () => this.cycleTab()), cmd("Next workspace", () => this.cycleWorkspace()),
@@ -124,6 +134,7 @@ export class App {
       cmd("Shrink focused pane", () => { this.tab().layout = resize(this.tab().layout, this.tab().focused, -.05); this.draw(); }),
       cmd("Toggle sidebar", () => { this.side = !this.side; this.draw(); }),
       ...(["file", "selection", "diagnostics"] as const).map(k => cmd(`Preview ${k} context for agent`, () => this.preview(k))),
+      cmd("Preview current file diff for agent", () => this.preview("diff")),
       cmd("Save workspace layout", () => saveState(statePath(), this.state)),
       cmd("Reload configuration", () => { const l = loadConfig(this.workspace().path); this.config = l.config; this.input.prefix = l.config.prefix; this.message = l.warnings.join(" | ") || "Configuration reloaded; new panes use new profiles"; this.draw(); }),
       cmd("Shortcut help", () => this.help()), cmd("Quit Under", () => this.shutdown()),
@@ -131,12 +142,16 @@ export class App {
   }
   private ask(title: string, submit: Modal["submit"]) { this.openModal({ kind: "input", title, text: "", index: 0, submit, cancelMode: "app" }); }
   private help() { this.openModal({ kind: "help", title: "Under shortcuts", text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\np: command palette  Tab/j/k: cycle panes\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`, index: 0, cancelMode: "app" }); }
-  private async preview(kind: ContextKind) {
-    const editor = this.editor().runtime.editor!; const snapshot = await editor.snapshot(); const text = contextText(snapshot, kind);
+  private async preview(kind: ContextKind | "diff") {
+    const editor = this.editor().runtime.editor!; const snapshot = await editor.snapshot(); const cwd = this.workspace().path;
+    const diff = kind === "diff" ? await fileDiff(cwd, snapshot.path) : undefined;
+    if (diff === "") throw new Error("No unstaged diff for the current file");
+    const text = diff !== undefined ? `Working tree diff (disk content, not unsaved buffer): ${snapshot.path}\n\n${diff}` : contextText(snapshot, kind as ContextKind);
     const target = this.tab().panes.find(p => p.kind === "agent" && this.runtimes.get(p.id)?.host.phase === "running");
     if (!target) throw new Error("Start an agent in the current tab first");
     this.openModal({ kind: "preview", title: `Context for ${target.profile} — Enter pastes; submit in native CLI`, text, index: 0, snapshot, editor, cancelMode: "app", submit: async () => {
       if (!sameSnapshot(snapshot, await editor.snapshot())) throw new Error("Editor context changed; generate a new preview");
+      if (diff !== undefined && diff !== await fileDiff(cwd, snapshot.path)) throw new Error("Diff changed; generate a new preview");
       const r = this.runtimes.get(target.id); if (!r || r.host.phase !== "running") throw new Error("Target agent is no longer running");
       r.host.write(r.view.encodePaste(new TextEncoder().encode(text)));
       this.tab().focused = target.id; this.input.mode = "terminal"; this.message = "Context pasted. Review and submit in the agent CLI.";
