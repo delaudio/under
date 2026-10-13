@@ -208,4 +208,11 @@ export const catalog = [
     height: 30,
     state: "tpl-editor-chat-stack",
   },
+  {
+    id: "tpl-compose",
+    export: "TemplateCompose",
+    width: 120,
+    height: 30,
+    state: "tpl-compose",
+  },
 ] as const;

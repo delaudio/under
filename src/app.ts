@@ -38,12 +38,13 @@ import {
   applyTemplate,
   paneOrder,
   leaf,
+  catalogue,
+  BUILTIN_CATALOGUE,
   TEMPLATE_ORDER,
-  TEMPLATES,
+  type Catalogue,
   type Pane,
   type SplitHandle,
   type SplitPath,
-  type TemplateName,
   type Workspace,
 } from "./model.ts";
 
@@ -116,6 +117,8 @@ export class App {
     size: number;
   };
   private hoverSplit = -1;
+  private catalogue: Catalogue = BUILTIN_CATALOGUE;
+  private layoutKeys = new Map<string, string>();
   private chatHidden = false;
   private message = "Ctrl-G m: menu · f: files · p: commands";
   private shutdownPromise?: Promise<void>;
@@ -142,6 +145,7 @@ export class App {
       : loadConfig(cwd);
     this.config = loaded.config;
     this.input = new InputOwner(this.config.prefix);
+    this.refreshCatalogue();
     renderer.setBackgroundColor(this.config.background);
     this.message = loaded.warnings.join(" | ") || this.message;
     const w = createWorkspace(cwd, this.config.preset);
@@ -375,7 +379,7 @@ export class App {
       t.panes.some((p) => p.kind === "hunk" && p.profile === profile),
     );
     if (!tab) {
-      tab = preset("review");
+      tab = preset("review", "codex", this.catalogue);
       tab.name = staged ? "staged diff" : "working diff";
       tab.panes[0]!.profile = profile;
       workspace.tabs.push(tab);
@@ -466,6 +470,7 @@ export class App {
     const w = this.workspace();
     const { config, warnings } = loadConfig(w.path);
     this.config = config;
+    this.refreshCatalogue();
     const profile =
       pane.kind === "task"
         ? config.tasks[pane.profile]
@@ -679,12 +684,18 @@ export class App {
           () => this.add("task", k),
         ),
       ),
-      ...TEMPLATE_ORDER.map((name, index) =>
-        cmd(`Layout: ${name} (${index + 1})`, () => this.applyLayout(name)),
-      ),
-      ...TEMPLATE_ORDER.map((name) =>
+      ...this.catalogue.order.map((name, index) => {
+        const key =
+          index < TEMPLATE_ORDER.length
+            ? String(index + 1)
+            : (this.catalogue.templates[name]?.key ?? "");
+        return cmd(`Layout: ${name} (${key || "menu"})`, () =>
+          this.applyLayout(name),
+        );
+      }),
+      ...this.catalogue.order.map((name) =>
         cmd(`New ${name} tab`, () => {
-          const t = preset(name);
+          const t = preset(name, "codex", this.catalogue);
           this.workspace().tabs.push(t);
           this.workspace().activeTab = t.id;
           this.draw();
@@ -723,10 +734,11 @@ export class App {
           const path = resolve(this.workspace().path, text);
           if (!(await stat(path)).isDirectory())
             throw new Error("Not a directory");
-          const w = createWorkspace(path);
+          this.config = loadConfig(path).config;
+          this.refreshCatalogue();
+          const w = createWorkspace(path, this.config.preset, this.catalogue);
           this.state.workspaces.push(w);
           this.state.active = w.id;
-          this.config = loadConfig(path).config;
           this.draw();
         }),
       ),
@@ -737,7 +749,7 @@ export class App {
         t.layout = remove(t.layout, p.id)!;
         t.panes = t.panes.filter((x) => x.id !== p.id);
         t.focused = t.panes[0]!.id;
-        const n = preset("run");
+        const n = preset("run", "codex", this.catalogue);
         n.panes = [p];
         n.layout = leaf(p);
         n.focused = p.id;
@@ -792,6 +804,7 @@ export class App {
       cmd("Reload configuration", () => {
         const l = loadConfig(this.workspace().path);
         this.config = l.config;
+        this.refreshCatalogue();
         this.input.prefix = l.config.prefix;
         this.message =
           l.warnings.join(" | ") ||
@@ -981,6 +994,7 @@ export class App {
           this.state.workspaces.length
       ]!.id;
     this.config = loadConfig(this.workspace().path).config;
+    this.refreshCatalogue();
     this.draw();
   }
   private run(action: Command["action"], allowPending = false) {
@@ -1169,19 +1183,31 @@ export class App {
       } else if (key.name === "[")
         t.layout = resize(t.layout, t.focused, -0.05);
       else if (key.name === "]") t.layout = resize(t.layout, t.focused, 0.05);
-      else if (/^[1-9]$/.test(key.name))
-        this.applyLayout(TEMPLATE_ORDER[Number(key.name) - 1]);
+      else if (/^[1-9]$/.test(key.name) || this.layoutKeys.has(key.name))
+        this.applyLayout(this.layoutKeys.get(key.name));
       else if (key.name === "q") this.run(() => this.shutdown(), true);
       else if (key.name === "?") this.help();
     }
     this.draw();
   };
-  private applyLayout(name?: TemplateName) {
+  applyLayout(name?: string) {
     if (!name) return;
+    const template = this.catalogue.templates[name];
+    if (!template) return;
     const agent =
       this.tab().panes.find((pane) => pane.kind === "agent")?.profile ?? "codex";
-    applyTemplate(this.tab(), name, agent);
-    this.report(`Layout: ${TEMPLATES[name].label}`);
+    applyTemplate(this.tab(), name, agent, this.catalogue);
+    this.report(`Layout: ${template.label}`);
+  }
+  private refreshCatalogue() {
+    this.catalogue = catalogue(this.config.templates);
+    this.layoutKeys = new Map<string, string>();
+    this.catalogue.order.forEach((name, index) => {
+      if (index < TEMPLATE_ORDER.length)
+        this.layoutKeys.set(String(index + 1), name);
+      const key = this.catalogue.templates[name]?.key;
+      if (key) this.layoutKeys.set(key, name);
+    });
   }
   private splitter(index: number) {
     const existing = this.splitters[index];

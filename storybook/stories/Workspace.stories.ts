@@ -135,3 +135,7 @@ export const TemplateRun = {
 export const TemplateEditorChatStack = {
   render: () => terminalPreview("tpl-editor-chat-stack"),
 } satisfies StoryObj;
+
+export const TemplateCompose = {
+  render: () => terminalPreview("tpl-compose"),
+} satisfies StoryObj;

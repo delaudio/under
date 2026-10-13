@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
 export type PaneKind = "nvim" | "yazi" | "hunk" | "agent" | "shell" | "task";
+export const PANE_KINDS: PaneKind[] = [
+  "nvim",
+  "yazi",
+  "hunk",
+  "agent",
+  "shell",
+  "task",
+];
 export type Pane = { id: string; kind: PaneKind; profile: string };
 export type Layout =
   | { pane: string }
@@ -12,7 +20,7 @@ export type Tab = {
   focused: string;
   zoom: boolean;
   /** Template that produced the visible arrangement, when one is applied. */
-  template?: TemplateName;
+  template?: string;
 };
 export type Workspace = {
   id: string;
@@ -35,15 +43,46 @@ export type TemplateName =
   | "editor"
   | "run"
   | "editor-chat-stack";
-export type TemplateSlot = { kind: PaneKind; profile: string };
+export type TemplateSlot = { kind: PaneKind; profile?: string };
+/** Serialized split tree a configuration file can express: leaves are slot indexes. */
+export type NumberLayout =
+  | number
+  | {
+      axis: "row" | "column";
+      ratio: number;
+      first: NumberLayout;
+      second: NumberLayout;
+    };
 export type Template = {
   label: string;
   /** Panes the template shows, in tab order; reused panes keep their identity. */
   slots: TemplateSlot[];
   /** Slot that receives focus when the current focus is not part of the template. */
   focus: number;
-  layout: (id: (index: number) => string) => Layout;
+  /** Arrangement over slot indexes, kept as data so templates stay serializable. */
+  shape: NumberLayout;
+  /** Optional extra shortcut key, from TEMPLATE_KEYS. */
+  key?: string;
 };
+export type Catalogue = {
+  templates: Record<string, Template>;
+  /** Built-ins first, then user templates in declaration order. */
+  order: string[];
+};
+/** Keys navigation does not own, available to user-defined layout templates. */
+export const TEMPLATE_KEYS = [..."acdeghinouvxy"];
+export const shapeToLayout = (
+  shape: NumberLayout,
+  id: (index: number) => string,
+): Layout =>
+  typeof shape === "number"
+    ? { pane: id(shape) }
+    : {
+        axis: shape.axis,
+        ratio: shape.ratio,
+        first: shapeToLayout(shape.first, id),
+        second: shapeToLayout(shape.second, id),
+      };
 /** Shortcut order: the digit after the navigation prefix applies each template. */
 export const TEMPLATE_ORDER: TemplateName[] = [
   "chat",
@@ -56,35 +95,32 @@ export const TEMPLATE_ORDER: TemplateName[] = [
   "run",
   "editor-chat-stack",
 ];
-const at = (pane: string): Layout => ({ pane });
-const row = (ratio: number, first: Layout, second: Layout): Layout => ({
-  axis: "row",
-  ratio,
-  first,
-  second,
-});
-const column = (ratio: number, first: Layout, second: Layout): Layout => ({
-  axis: "column",
-  ratio,
-  first,
-  second,
-});
+const row = (
+  ratio: number,
+  first: NumberLayout,
+  second: NumberLayout,
+): NumberLayout => ({ axis: "row", ratio, first, second });
+const column = (
+  ratio: number,
+  first: NumberLayout,
+  second: NumberLayout,
+): NumberLayout => ({ axis: "column", ratio, first, second });
 export const TEMPLATES: Record<TemplateName, Template> = {
   chat: {
     label: "chat only",
-    slots: [{ kind: "agent", profile: "codex" }],
+    slots: [{ kind: "agent" }],
     focus: 0,
-    layout: (id) => at(id(0)),
+    shape: 0,
   },
   code: {
     label: "files, editor, chat",
     slots: [
       { kind: "nvim", profile: "nvim" },
-      { kind: "agent", profile: "codex" },
+      { kind: "agent" },
       { kind: "yazi", profile: "yazi" },
     ],
     focus: 0,
-    layout: (id) => row(0.26, at(id(2)), row(0.65, at(id(0)), at(id(1)))),
+    shape: row(0.26, 2, row(0.65, 0, 1)),
   },
   "files-editor": {
     label: "files, editor",
@@ -93,88 +129,109 @@ export const TEMPLATES: Record<TemplateName, Template> = {
       { kind: "nvim", profile: "nvim" },
     ],
     focus: 1,
-    layout: (id) => row(0.3, at(id(0)), at(id(1))),
+    shape: row(0.3, 0, 1),
   },
   review: {
     label: "hunk, chat",
     slots: [
       { kind: "hunk", profile: "hunk" },
-      { kind: "agent", profile: "codex" },
+      { kind: "agent" },
     ],
     focus: 0,
-    layout: (id) => row(0.65, at(id(0)), at(id(1))),
+    shape: row(0.65, 0, 1),
   },
   "files-review": {
     label: "files, hunk, chat",
     slots: [
       { kind: "yazi", profile: "yazi" },
       { kind: "hunk", profile: "hunk" },
-      { kind: "agent", profile: "codex" },
+      { kind: "agent" },
     ],
     focus: 1,
-    layout: (id) => row(0.26, at(id(0)), row(0.65, at(id(1)), at(id(2)))),
+    shape: row(0.26, 0, row(0.65, 1, 2)),
   },
   "editor-chat": {
     label: "editor, chat",
     slots: [
       { kind: "nvim", profile: "nvim" },
-      { kind: "agent", profile: "codex" },
+      { kind: "agent" },
     ],
     focus: 0,
-    layout: (id) => row(0.65, at(id(0)), at(id(1))),
+    shape: row(0.65, 0, 1),
   },
   editor: {
     label: "editor only",
     slots: [{ kind: "nvim", profile: "nvim" }],
     focus: 0,
-    layout: (id) => at(id(0)),
+    shape: 0,
   },
   run: {
     label: "shell only",
     slots: [{ kind: "shell", profile: "shell" }],
     focus: 0,
-    layout: (id) => at(id(0)),
+    shape: 0,
   },
   "editor-chat-stack": {
     label: "editor above chat",
     slots: [
       { kind: "nvim", profile: "nvim" },
-      { kind: "agent", profile: "codex" },
+      { kind: "agent" },
     ],
     focus: 0,
-    layout: (id) => column(0.6, at(id(0)), at(id(1))),
+    shape: column(0.6, 0, 1),
   },
 };
 const slotProfile = (slot: TemplateSlot, agent: string) =>
-  slot.kind === "agent" ? agent : slot.profile;
+  slot.kind === "agent"
+    ? (slot.profile ?? agent)
+    : (slot.profile ?? slot.kind);
+/** Merge user templates over the built-ins; an override keeps its position. */
+export function catalogue(custom: Record<string, Template> = {}): Catalogue {
+  return {
+    templates: { ...TEMPLATES, ...custom },
+    order: [
+      ...TEMPLATE_ORDER,
+      ...Object.keys(custom).filter((name) => !(name in TEMPLATES)),
+    ],
+  };
+}
+export const BUILTIN_CATALOGUE: Catalogue = catalogue();
 /** Pane ids in layout order, which is also the visible pane order. */
 export function paneOrder(layout: Layout): string[] {
   return "pane" in layout
     ? [layout.pane]
     : [...paneOrder(layout.first), ...paneOrder(layout.second)];
 }
-export function preset(name: TemplateName = "code", agent = "codex"): Tab {
-  const template = TEMPLATES[name];
+export function preset(
+  name: string = "code",
+  agent = "codex",
+  c: Catalogue = BUILTIN_CATALOGUE,
+): Tab {
+  const template = c.templates[name] ?? c.templates["code"]!;
+  const templateName = c.templates[name] ? name : "code";
   const panes = template.slots.map((slot) =>
     createPane(slot.kind, slotProfile(slot, agent)),
   );
   return {
     id: uid(),
-    name,
+    name: templateName,
     panes,
     focused: panes[template.focus]!.id,
     zoom: false,
-    layout: template.layout((index) => panes[index]!.id),
-    template: name,
+    layout: shapeToLayout(template.shape, (index) => panes[index]!.id),
+    template: templateName,
   };
 }
 /** Show the template's panes and arrange them. Never stops or restarts a pane. */
 export function applyTemplate(
   tab: Tab,
-  name: TemplateName,
+  name: string,
   agent = "codex",
+  c: Catalogue = BUILTIN_CATALOGUE,
 ): void {
-  const template = TEMPLATES[name];
+  const template = c.templates[name];
+  // A stored template can disappear when configuration changes; keep the tab.
+  if (!template) return;
   const shown = new Set(paneOrder(tab.layout));
   const used = new Set<string>();
   const chosen = template.slots.map((slot) => {
@@ -193,7 +250,7 @@ export function applyTemplate(
     tab.panes.push(pane);
     return pane;
   });
-  tab.layout = template.layout((index) => chosen[index]!.id);
+  tab.layout = shapeToLayout(template.shape, (index) => chosen[index]!.id);
   tab.template = name;
   tab.zoom = false;
   if (!chosen.some((pane) => pane.id === tab.focused))
@@ -201,9 +258,10 @@ export function applyTemplate(
 }
 export function createWorkspace(
   path: string,
-  name: TemplateName = "code",
+  name: string = "code",
+  c: Catalogue = BUILTIN_CATALOGUE,
 ): Workspace {
-  const tabs = [preset(name)];
+  const tabs = [preset(name, "codex", c)];
   return { id: uid(), path, tabs, activeTab: tabs[0]!.id };
 }
 export function split(
