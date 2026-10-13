@@ -167,10 +167,18 @@ Its manager ratio is set to `[0, 1, 0]` and its `edit` opener uses Under's edito
 file-type rules remain configured by the user. No global Yazi files are changed.
 Folder icons depend on the font selected in your host terminal.
 
-Hunk uses `hunk diff --watch`, or `hunk diff --staged --watch` for staged review.
-Its editor action uses the same bridge, including the selected line. Deleted
-files remain governed by Hunk's normal behavior. Custom revision reviews can be
-configured as additional profiles. No global editor configuration is changed.
+Hunk reviews the workspace root by default. **Review this directory**,
+**Review staged here** and **Review against revision…** — and `Ctrl-G r` /
+`Ctrl-G s`, which use the directory the file panel is showing — scope a review to
+another directory, including a worktree that lives outside the workspace, or to a
+branch, tag or commit. Two revisions can be given as `from to` or `from..to`.
+Each target gets its own tab and repeated actions reuse it.
+
+Inside native Yazi, `R` reviews the directory Yazi is currently showing and `C`
+reviews its staged changes; both call Under's helper and your own bindings are
+kept. Hunk's editor action uses the same bridge, including the selected line.
+Deleted files remain governed by Hunk's normal behavior. No global editor
+configuration is changed.
 
 ### Agents and context
 

@@ -72,11 +72,11 @@ test("Yazi overlay preserves configuration with a single-column layout and edito
     );
     await writeFile(join(root, "keymap.toml"), "# custom bindings\n");
     await mkdir(join(root, "plugins"));
-    overlay = await yaziConfig(
-      "/tmp/helper ' è/nvim",
-      { YAZI_CONFIG_HOME: root },
-      "Version: 25.5.31",
-    );
+    overlay = await yaziConfig({
+      editor: "/tmp/helper ' è/nvim",
+      env: { YAZI_CONFIG_HOME: root },
+      version: "Version: 25.5.31",
+    });
     const result = parse(await readFile(join(overlay, "yazi.toml"), "utf8"));
     expect(result.mgr).toEqual({ show_hidden: true, ratio: [0, 1, 0] });
     expect(result.open).toEqual(parse(original).open);
@@ -285,16 +285,16 @@ test.skipIf(
       setup.mockInput.pressEscape();
       await Bun.sleep(100);
       expect((await app.editorSnapshot()).modified).toBe(true);
-      await app.openReview(false);
+      await app.openReview();
       await wait(() => setup.captureCharFrame().includes("working-content"));
       const working = app.tab().id;
-      await app.openReview(false);
+      await app.openReview();
       expect(app.tab().id).toBe(working);
       expect(app.workspace().tabs.length).toBe(2);
-      await app.openReview(true);
+      await app.openReview({ staged: true });
       await wait(() => setup.captureCharFrame().includes("staged-content"));
       expect(app.tab().id).not.toBe(working);
-      await app.openReview(true);
+      await app.openReview({ staged: true });
       expect(app.workspace().tabs.length).toBe(3);
       expect((await app.editorSnapshot()).modified).toBe(true);
       expect(await readFile(file, "utf8")).toBe("working-content\n");
@@ -320,7 +320,7 @@ test("Review reports missing Hunk and non-Git directories without creating tabs"
     available: () => false,
   });
   try {
-    await expect(app.openReview(false)).rejects.toThrow("Install Hunk");
+    await expect(app.openReview()).rejects.toThrow("Install Hunk");
     expect(app.workspace().tabs.length).toBe(1);
   } finally {
     app.disposeUI();
@@ -335,7 +335,7 @@ test("Review reports missing Hunk and non-Git directories without creating tabs"
     available: () => true,
   });
   try {
-    await expect(present.openReview(true)).rejects.toThrow("Git working tree");
+    await expect(present.openReview({ staged: true })).rejects.toThrow("Git working tree");
     expect(present.workspace().tabs.length).toBe(1);
   } finally {
     present.disposeUI();

@@ -150,3 +150,19 @@ attributes and widths. Browser Storybook only imports those generated frames,
 never Bun terminal code. Playwright checks the catalog, frame/story mapping,
 reviewed baseline inventory and exact terminal element screenshots. Real tool
 startup and editing are established by the separate PTY tests.
+
+A review is a pane like any other, so it can be scoped. `Pane` carries an optional
+absolute `cwd` and optional `args`; `startPane()` runs the pane there and
+`withArgs()` inserts the arguments before a trailing `--watch`, which is how a
+revision reaches `hunk diff <target> --watch`. `openReview()` keys tab reuse on
+the profile, directory and revision together, so two worktrees or two revisions
+get their own tab. The directory may sit outside the workspace: it is chosen
+explicitly, and the file browser's containment rule is unaffected.
+
+Tools can ask Under for a review over the existing per-workspace socket. The
+bridge message grew a `kind` discriminator, so `review-here` carries the
+directory the tool is running in rather than a file location. Yazi needs no
+guessing: the temporary configuration also writes a merged `keymap.toml` whose
+`prepend_keymap` entries run Under's helper with the `shell` action, which Yazi
+executes in its current directory. Bindings are only added on keys the user's own
+`keymap.toml` has not taken.

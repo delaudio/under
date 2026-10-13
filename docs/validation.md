@@ -21,8 +21,8 @@ use `--clean` or disable automatic initial editor launch. Directory containment,
 wrapped-menu mouse positions and unavailable agent actions have native tests.
 
 On 2026-10-12, local macOS arm64 verification with Bun 1.4.3 and Neovim
-0.12.5 passed strict checking, all 58 native tests with no skips, Storybook
-checking/build, and all 43 browser checks (42 screenshot comparisons and one
+0.12.5 passed strict checking, all 65 native tests with no skips, Storybook
+checking/build, and all 44 browser checks (43 screenshot comparisons and one
 catalog/inventory check). Baselines were inspected before comparison. A separate
 local probe confirmed startup and input with the owner's ordinary Neovim
 configuration without saving file changes. The in-band resize-report adapter has
@@ -31,7 +31,7 @@ after a pane resize (expected 55×26, observed 70×34). This is local evidence; 
 new CI workflow has not yet run for these uncommitted changes.
 
 The browser visual gate renders the production App and terminal panes into
-42 native frames and compares Chromium element screenshots. See
+43 native frames and compares Chromium element screenshots. See
 [coverage and limitations](../storybook/COVERAGE.md). The visual CI job uses
 macOS baselines; the native CI job retains Linux and macOS tool checks.
 
@@ -65,6 +65,7 @@ Coverage includes:
 - dragging a split boundary with the mouse resizes it, clamps at the minimum and maximum, keeps focus and sends no terminal input;
 - every layout template, applied with its shortcut, hides and re-shows panes without stopping them, recreating them or quitting the editor;
 - user-declared templates are validated field by field, merged over the built-ins, listed in the menu and reachable by their configured key;
+- a review targets another directory or a revision, is reused per target, and Yazi's review bindings reach Under without shadowing the user's keys;
 - entering navigation mode is visible in the footer and the shortcut help opens from both `h` and `?`;
 - RPC teardown races reject in-flight requests without an unhandled rejection;
 - quit confirms editor exit from the editor socket and the process table, not only the PTY exit event;

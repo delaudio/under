@@ -39,12 +39,25 @@ export function yaziVersion(binary: string): string {
   }
 }
 
-/** Preserve native configuration with an IDE sidebar layout and editor bridge. */
-export async function yaziConfig(
-  editor: string,
-  env: Record<string, string> = {},
-  version = "",
-) {
+/** Review bindings Under adds to Yazi, on keys the default keymap leaves free. */
+export const REVIEW_BINDINGS = [
+  { on: "R", args: "", desc: "Review this directory in Under Hunk" },
+  { on: "C", args: "--staged", desc: "Review staged changes in Under Hunk" },
+] as const;
+
+const record = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
+/** Preserve native configuration with an IDE sidebar layout, editor bridge and
+ * review bindings that report the directory Yazi is currently showing. */
+export async function yaziConfig(options: {
+  editor: string;
+  /** Under CLI helper used by the review bindings. */
+  tool?: string;
+  env?: Record<string, string>;
+  version?: string;
+}) {
+  const { editor, tool, env = {}, version = "" } = options;
   const source = resolve(
     env.YAZI_CONFIG_HOME ||
       process.env.YAZI_CONFIG_HOME ||
@@ -63,7 +76,9 @@ export async function yaziConfig(
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     }
-    for (const name of entries.filter((name) => name !== "yazi.toml"))
+    for (const name of entries.filter(
+      (name) => !["yazi.toml", "keymap.toml"].includes(name),
+    ))
       await symlink(join(source, name), join(directory, name));
     const config = entries.includes("yazi.toml")
       ? parse(await readFile(join(source, "yazi.toml"), "utf8"))
@@ -101,6 +116,40 @@ export async function yaziConfig(
       ],
     };
     await writeFile(join(directory, "yazi.toml"), stringify(config));
+
+    // Key bindings live in keymap.toml. Keep the user's file, add the review
+    // bindings on keys they have not already taken, and never shadow theirs.
+    const keymap = entries.includes("keymap.toml")
+      ? parse(await readFile(join(source, "keymap.toml"), "utf8"))
+      : {};
+    const mgr = record(keymap.mgr) ? keymap.mgr : {};
+    const taken = new Set<string>();
+    for (const list of ["keymap", "prepend_keymap", "append_keymap"]) {
+      const value = mgr[list];
+      if (Array.isArray(value))
+        for (const entry of value)
+          if (record(entry) && typeof entry.on === "string")
+            taken.add(entry.on);
+    }
+    const quoted = tool?.replaceAll("'", "'\\''");
+    const bindings = quoted
+      ? REVIEW_BINDINGS.filter((binding) => !taken.has(binding.on)).map(
+          (binding) => ({
+            on: binding.on,
+            run: `shell '${quoted}' review-here ${binding.args}`.trim(),
+            desc: binding.desc,
+          }),
+        )
+      : [];
+    if (entries.includes("keymap.toml") || bindings.length) {
+      if (bindings.length)
+        mgr.prepend_keymap = [
+          ...bindings,
+          ...(Array.isArray(mgr.prepend_keymap) ? mgr.prepend_keymap : []),
+        ];
+      keymap.mgr = mgr;
+      await writeFile(join(directory, "keymap.toml"), stringify(keymap));
+    }
     return directory;
   } catch (e) {
     await rm(directory, { recursive: true, force: true });

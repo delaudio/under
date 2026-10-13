@@ -129,11 +129,17 @@ test.skipIf(process.env.UNDER_NO_SOCKETS === "1")(
     const first: string[] = [],
       second: string[] = [];
     try {
-      await a.start(async (p) => {
-        first.push(p);
+      await a.start({
+        open: async (p) => {
+          first.push(p);
+        },
+        review: async () => {},
       });
-      await b.start(async (p) => {
-        second.push(p);
+      await b.start({
+        open: async (p) => {
+          second.push(p);
+        },
+        review: async () => {},
       });
       await openRemote(a.path, "/tmp/a ' è.ts", 2, 1);
       await openRemote(b.path, "/tmp/b.ts");

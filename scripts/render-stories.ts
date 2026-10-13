@@ -140,8 +140,19 @@ for (const spec of catalog) {
   try {
     const template = spec.state.startsWith("tpl-")
       ? (spec.state.slice(4) as TemplateName)
-      : undefined;
+      : spec.state === "review-scoped"
+        ? ("review" as TemplateName)
+        : undefined;
     if (template) app.applyLayout(template);
+    if (spec.state === "review-scoped") {
+      // A review scoped to a revision, shown by the pane title and the tab name.
+      const tab = app.tab();
+      const hunk = tab.panes.find((pane) => pane.kind === "hunk")!;
+      hunk.cwd = "/fixtures/project";
+      hunk.args = ["main"];
+      tab.name = "diff main";
+      app.draw();
+    }
     if (template) {
       // Template stories attach by kind so every slot shows its own pane.
       for (const pane of app.tab().panes)
