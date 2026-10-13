@@ -79,6 +79,7 @@ The palette can be filtered by typing. Escape closes it.
 | z                   | Toggle focused-pane zoom                                 |
 | [ / ]               | Shrink / grow focused split                              |
 | drag a pane border  | Resize that split with the mouse                        |
+| 1–9                 | Apply a layout template (see Layouts)                   |
 | b                   | Toggle workspace sidebar                                 |
 | ?                   | Shortcut help                                            |
 | q                   | Save layout and quit after checking unsaved buffers      |
@@ -88,9 +89,28 @@ commands require navigation mode. A modal owns input until it is dismissed.
 
 ### Layouts
 
-- **code:** project files, Neovim and an agent chooser.
-- **review:** Hunk and an agent placeholder.
-- **run:** a shell placeholder.
+Layout templates rearrange the **current tab**. Press `Ctrl-G` then a digit, or
+pick one from the View menu or the palette. The same templates are available as
+new tabs from the File menu (**New &lt;name&gt; tab**).
+
+| # | Template | Composition |
+| --- | --- | --- |
+| 1 | `chat` | chat only |
+| 2 | `code` | files \| editor \| chat |
+| 3 | `files-editor` | files \| editor |
+| 4 | `review` | hunk \| chat |
+| 5 | `files-review` | files \| hunk \| chat |
+| 6 | `editor-chat` | editor \| chat |
+| 7 | `editor` | editor only |
+| 8 | `run` | shell only |
+| 9 | `editor-chat-stack` | editor above chat |
+
+Applying a template only **shows, hides and arranges** panes. Nothing is stopped,
+restarted or reloaded, so a running chat keeps its thread and Neovim keeps its
+unsaved buffers; switching to `chat` and back to `code` loses nothing. Panes a
+template does not include keep running hidden. If a template needs a pane kind
+the tab does not have, a stopped placeholder appears and starting stays an
+explicit action.
 
 Start stopped tools explicitly through the menus or palette; Enter also starts
 a focused stopped pane. Selecting a provider reuses the idle chat pane. New tabs do not execute
