@@ -250,4 +250,11 @@ export const catalog = [
     height: 30,
     state: "destinations",
   },
+  {
+    id: "preview-destination",
+    export: "PreviewDestination",
+    width: 120,
+    height: 30,
+    state: "preview-destination",
+  },
 ] as const;

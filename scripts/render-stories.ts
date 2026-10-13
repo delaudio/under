@@ -5,6 +5,7 @@ import { App, type PaneHost, type PaneEditor } from "../src/app.ts";
 import { defaults } from "../src/config.ts";
 import { MENU_LABELS, menuSlots } from "../src/menu.ts";
 import {
+  preset,
   splitHandles,
   type Template,
   type TemplateName,
@@ -185,6 +186,7 @@ for (const spec of catalog) {
           "stopping",
           "agent-error",
           "context",
+          "preview-destination",
         ].includes(spec.state)
       ) {
         const pane = app.tab().panes[1]!;
@@ -238,6 +240,20 @@ for (const spec of catalog) {
     if (spec.state === "destinations") {
       navigate();
       key("g");
+    }
+    if (spec.state === "preview-destination") {
+      // A second running agent in another tab makes the destination ambiguous.
+      const tab = preset("editor-chat");
+      app.workspace().tabs.push(tab);
+      app.attachTerminal(
+        tab.panes.find((pane) => pane.kind === "agent")!,
+        new FixtureHost("running", agentOutput),
+      );
+      navigate();
+      key("p");
+      await setup.mockInput.typeText("Preview file context");
+      setup.mockInput.pressEnter();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
     if (spec.state === "files") {
       navigate();
@@ -296,6 +312,7 @@ for (const spec of catalog) {
         "quick",
         "quick-narrow",
         "destinations",
+        "preview-destination",
       ].includes(spec.state) &&
       !text.includes("under_")
     )
@@ -306,6 +323,8 @@ for (const spec of catalog) {
       throw new Error(`Missing quick open results in ${spec.id}`);
     if (spec.state === "destinations" && !text.includes("code"))
       throw new Error("Missing destinations");
+    if (spec.state === "preview-destination" && !text.includes("Choose the agent"))
+      throw new Error("Missing destination picker");
     if (spec.state === "form" && !text.includes("File path"))
       throw new Error("Missing file form");
     if (menu && !text.includes(menu))
