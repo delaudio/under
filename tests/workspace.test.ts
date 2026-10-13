@@ -35,6 +35,43 @@ test("files list directories first, navigate within the project and preserve act
   }
 });
 
+test("the shortcut help opens from h and from ? and Escape returns ownership", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 30 });
+  const app = new App(setup.renderer, "/fixtures/project", undefined, {
+    config: defaults,
+    files: [],
+  });
+  try {
+    await setup.flush();
+    // Entering navigation must be visible, not just a mode change.
+    setup.mockInput.pressKey("g", { ctrl: true });
+    await setup.flush();
+    expect(app.input.mode).toBe("app");
+    const footer = setup.captureCharFrame().split("\n").at(-2) ?? "";
+    expect(footer).toContain("NAV |");
+    expect(footer).toContain("h: help");
+    setup.mockInput.pressEscape();
+    await Bun.sleep(40);
+
+    for (const key of ["h", "?"]) {
+      setup.mockInput.pressKey("g", { ctrl: true });
+      setup.mockInput.pressKey(key);
+      await setup.flush();
+      expect(app.input.mode).toBe("modal");
+      expect(setup.captureCharFrame()).toContain("Under shortcuts");
+      setup.mockInput.pressEscape();
+      await Bun.sleep(40);
+      expect(app.input.mode).toBe("app");
+      setup.mockInput.pressEscape();
+      await Bun.sleep(40);
+      expect(app.input.mode).toBe("terminal");
+    }
+  } finally {
+    app.disposeUI();
+    await setup.dispose();
+  }
+});
+
 test("menus use correct mouse coordinates after wrap/resize, disabled actions stay open and Escape restores ownership", async () => {
   const setup = await createTestRenderer({ width: 120, height: 30 });
   const app = new App(setup.renderer, "/fixtures/project", undefined, {

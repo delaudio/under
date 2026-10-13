@@ -68,6 +68,7 @@ test("rejected templates name the offending field", () => {
   bad({ compose: { ...compose, focus: 3 } });
   bad({ compose: { ...compose, key: "m" } });
   bad({ compose: { ...compose, key: "1" } });
+  bad({ compose: { ...compose, key: "h" } });
   bad({ compose: { ...compose, label: "  " } });
 });
 

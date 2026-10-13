@@ -69,8 +69,9 @@ export type Catalogue = {
   /** Built-ins first, then user templates in declaration order. */
   order: string[];
 };
-/** Keys navigation does not own, available to user-defined layout templates. */
-export const TEMPLATE_KEYS = [..."acdeghinouvxy"];
+/** Keys navigation does not own, available to user-defined layout templates.
+ * `h` is excluded because it opens the shortcut help. */
+export const TEMPLATE_KEYS = [..."acdeginouvxy"];
 export const shapeToLayout = (
   shape: NumberLayout,
   id: (index: number) => string,
