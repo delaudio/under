@@ -112,6 +112,14 @@ for (const spec of catalog) {
             templates: { compose: userTemplate },
           }
         : defaults,
+    quickFiles: spec.state.startsWith("quick")
+      ? [
+          "src/app.ts",
+          "src/app-shell.ts",
+          "src/application/index.ts",
+          "src/README.md",
+        ]
+      : undefined,
     available: () => spec.state !== "disabled",
     files:
       spec.state === "empty"
@@ -222,6 +230,15 @@ for (const spec of catalog) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     if (spec.state === "navigation") navigate();
+    if (spec.state === "quick" || spec.state === "quick-narrow") {
+      navigate();
+      key("o");
+      await setup.mockInput.typeText("app");
+    }
+    if (spec.state === "destinations") {
+      navigate();
+      key("g");
+    }
     if (spec.state === "files") {
       navigate();
       key("f");
@@ -272,12 +289,23 @@ for (const spec of catalog) {
     const text = setup.captureCharFrame();
     if (
       !menu &&
-      !["palette", "help", "context"].includes(spec.state) &&
+      ![
+        "palette",
+        "help",
+        "context",
+        "quick",
+        "quick-narrow",
+        "destinations",
+      ].includes(spec.state) &&
       !text.includes("under_")
     )
       throw new Error(`Missing workspace in ${spec.id}`);
     if (spec.state === "context" && !text.includes("Context for codex"))
       throw new Error("Missing context preview");
+    if (spec.state.startsWith("quick") && !text.includes("src/app.ts"))
+      throw new Error(`Missing quick open results in ${spec.id}`);
+    if (spec.state === "destinations" && !text.includes("code"))
+      throw new Error("Missing destinations");
     if (spec.state === "form" && !text.includes("File path"))
       throw new Error("Missing file form");
     if (menu && !text.includes(menu))

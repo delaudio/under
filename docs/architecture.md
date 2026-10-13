@@ -132,6 +132,20 @@ Menu cell positions are recalculated after resize and wrapping. Dropdowns and
 forms own input until dismissed. Project-defined commands and agent launches
 continue to require an explicit action; restore launches no processes.
 
+Quick Open and the destination switcher are two more list modals on the same
+machinery: `modalItems()` returns the rows for whichever modal is open, so
+filtering, arrows, paging, mouse clicks and paste behave identically everywhere.
+`src/search.ts` owns the file side: `listFiles()` prefers
+`git ls-files --cached --others --exclude-standard` so a repository's ignore
+rules decide the candidates, falls back to a bounded walk with a fixed skip list,
+and `fuzzyScore()`/`rank()` order the results with a stable index tiebreak.
+Enumeration happens once when the modal opens and filtering is then in memory, so
+typing stays responsive; a generation counter drops results from a modal the user
+already closed. Candidates for the active workspace are cached per workspace, and
+the recent files that fill an empty query are remembered per workspace too.
+The overlay's row count is derived from the height it is about to have rather
+than read back from the renderable, whose computed size lags a layout pass.
+
 Layout templates are a catalogue in `src/model.ts`: each names the panes it shows
 and the layout over them, in the order the tab already holds. `applyTemplate()`
 reuses a pane of the required kind, preferring one that is currently visible, and
