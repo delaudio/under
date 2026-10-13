@@ -229,4 +229,25 @@ export const catalog = [
     height: 35,
     state: "review-scoped",
   },
+  {
+    id: "quick-open",
+    export: "QuickOpen",
+    width: 120,
+    height: 30,
+    state: "quick",
+  },
+  {
+    id: "quick-open-narrow",
+    export: "QuickOpenNarrow",
+    width: 50,
+    height: 15,
+    state: "quick-narrow",
+  },
+  {
+    id: "destinations",
+    export: "Destinations",
+    width: 120,
+    height: 30,
+    state: "destinations",
+  },
 ] as const;

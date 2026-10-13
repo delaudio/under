@@ -8,7 +8,7 @@ import {
   type PasteEvent,
 } from "@opentui/core";
 import { stat, writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
-import { basename, resolve, join } from "node:path";
+import { basename, resolve, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { yaziConfig, yaziVersion } from "./yazi.ts";
@@ -16,6 +16,7 @@ import { repaint } from "./repaint.ts";
 import { terminalResponse } from "./terminal.ts";
 import { FileBrowser, displayName, type FileEntry } from "./files.ts";
 import { MENU_LABELS, menuSlots, wrapText, type MenuLabel } from "./menu.ts";
+import { fuzzyScore, listFiles, rank } from "./search.ts";
 import { chmod } from "node:fs/promises";
 import { InputOwner } from "./input.ts";
 import { PtyHost } from "./pty.ts";
@@ -77,7 +78,7 @@ type Command = {
   checked?: boolean;
 };
 type Modal = {
-  kind: "palette" | "menu" | "input" | "preview" | "help";
+  kind: "palette" | "menu" | "input" | "preview" | "help" | "quick" | "destinations";
   menu?: MenuLabel;
   title: string;
   text: string;
@@ -120,6 +121,10 @@ export class App {
   private hoverSplit = -1;
   private catalogue: Catalogue = BUILTIN_CATALOGUE;
   private layoutKeys = new Map<string, string>();
+  /** Relative Quick Open candidates for the active workspace, bounded. */
+  private quickFiles: string[] = [];
+  private quickGeneration = 0;
+  private recents = new Map<string, string[]>();
   private chatHidden = false;
   private message = "Ctrl-G m: menu · f: files · p: commands";
   private shutdownPromise?: Promise<void>;
@@ -138,6 +143,8 @@ export class App {
     private readonly options: {
       config?: Config;
       files?: FileEntry[];
+      /** Deterministic Quick Open candidates for previews and tests. */
+      quickFiles?: string[];
       available?: (command: string) => boolean;
     } = {},
   ) {
@@ -206,14 +213,13 @@ export class App {
       visible: false,
       onMouseDown: (event) => {
         event.stopPropagation();
-        if (!this.modal || !["menu", "palette"].includes(this.modal.kind))
-          return;
+        if (!this.modal || !App.isList(this.modal.kind)) return;
         const index =
           this.menuStart +
           event.y -
           this.overlay.y -
           (this.modal.kind === "menu" ? 2 : 3);
-        const choice = this.choices()[index];
+        const choice = this.modalItems()[index];
         if (choice) {
           if (choice.disabled) {
             this.report(choice.disabled);
@@ -722,6 +728,8 @@ export class App {
           this.draw();
         }),
       ),
+      cmd("Quick open file…", () => this.openQuickOpen()),
+      cmd("Go to workspace or tab…", () => this.openDestinations()),
       cmd("Add Neovim", () => this.add("nvim")),
       cmd("Add Yazi", () => this.openYazi()),
       cmd("Working tree diff", () => this.openReview()),
@@ -987,7 +995,7 @@ export class App {
     this.openModal({
       kind: "help",
       title: "Under shortcuts",
-      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\nTab/j/k: cycle panes  1-9: layouts\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
+      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\no: quick open  g: go to workspace or tab\nTab/j/k: cycle panes  1-9: layouts\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
       index: 0,
       cancelMode: "app",
     });
@@ -1041,6 +1049,8 @@ export class App {
   private closeModal() {
     const previous = this.modal?.cancelMode ?? "app";
     this.modal = undefined;
+    // Cancels an in-flight Quick Open enumeration so stale results are dropped.
+    this.quickGeneration++;
     this.input.mode = previous;
     this.draw();
   }
@@ -1075,9 +1085,11 @@ export class App {
           .includes(this.modal?.text.toLowerCase() ?? "");
       const label = this.modal.menu;
       if (label === "File")
-        return /^(Open |New |Next |Close current|Save |Quit)/.test(c.name);
+        return /^(Open |Quick open|New |Next |Close current|Save |Quit)/.test(
+          c.name,
+        );
       if (label === "View")
-        return /^(Toggle |Grow |Shrink |Move |Close focused|Focus files|Refresh files|Layout: )/.test(
+        return /^(Toggle |Grow |Shrink |Move |Close focused|Focus files|Refresh files|Go to |Layout: )/.test(
           c.name,
         );
       if (label === "Review")
@@ -1090,11 +1102,19 @@ export class App {
       return c.name === "Shortcut help" || c.name === "Reload configuration";
     });
   }
+  private static isList(kind: Modal["kind"]) {
+    return (
+      kind === "palette" ||
+      kind === "menu" ||
+      kind === "quick" ||
+      kind === "destinations"
+    );
+  }
   private modalLines() {
     const m = this.modal;
     if (!m) return [];
-    if (m.kind === "palette" || m.kind === "menu")
-      return this.choices().map(
+    if (App.isList(m.kind))
+      return this.modalItems().map(
         (c, i) =>
           `${i === m.index ? "›" : " "} ${c.checked === undefined ? "" : c.checked ? "[✓] " : "[ ] "}${c.name}${c.disabled ? " (unavailable)" : ""}`,
       );
@@ -1143,7 +1163,7 @@ export class App {
     if (this.input.mode !== "terminal") {
       event.preventDefault();
       event.stopPropagation();
-      if (this.modal?.kind === "input" || this.modal?.kind === "palette") {
+      if (this.modal && App.hasInput(this.modal.kind)) {
         const text = new TextDecoder()
           .decode(event.bytes)
           .replace(/[\x00-\x1f\x7f]/g, "");
@@ -1181,6 +1201,12 @@ export class App {
       this.draw();
       return;
     }
+    // The prefix itself only switches mode. Its letter must never also act as a
+    // command, or a shortcut on that letter would fire while entering navigation.
+    if (key.ctrl && `ctrl+${key.name}` === this.input.prefix) {
+      this.draw();
+      return;
+    }
     if (this.modal) {
       const m = this.modal;
       if (key.name === "escape") {
@@ -1198,8 +1224,8 @@ export class App {
         return;
       }
       if (key.name === "return" || key.name === "enter") {
-        if (m.kind === "palette" || m.kind === "menu") {
-          const c = this.choices()[m.index];
+        if (App.isList(m.kind)) {
+          const c = this.modalItems()[m.index];
           if (c?.disabled) {
             this.report(c.disabled);
             return;
@@ -1227,12 +1253,12 @@ export class App {
           0,
           Math.min(
             m.index + delta,
-            m.kind === "palette" || m.kind === "menu"
-              ? Math.max(0, this.choices().length - 1)
+            App.isList(m.kind)
+              ? Math.max(0, this.modalItems().length - 1)
               : Math.max(0, this.modalLines().length - 1),
           ),
         );
-      } else if (m.kind === "input" || m.kind === "palette") {
+      } else if (App.hasInput(m.kind)) {
         if (key.name === "backspace")
           m.text = [...m.text].slice(0, -1).join("");
         else if (
@@ -1296,7 +1322,9 @@ export class App {
           this.input.mode = "terminal";
           this.filesFocused = false;
         }
-      } else if (key.name === "p") this.palette();
+      } else if (key.name === "o") void this.openQuickOpen();
+      else if (key.name === "g") this.openDestinations();
+      else if (key.name === "p") this.palette();
       else if (key.name === "t") this.cycleTab();
       else if (key.name === "w") this.cycleWorkspace();
       else if (key.name === "z") t.zoom = !t.zoom;
@@ -1331,6 +1359,138 @@ export class App {
       const key = this.catalogue.templates[name]?.key;
       if (key) this.layoutKeys.set(key, name);
     });
+  }
+  /** Modals that take a text filter and render a list of items. */
+  private static hasInput(kind: Modal["kind"]) {
+    return (
+      kind === "palette" ||
+      kind === "input" ||
+      kind === "quick" ||
+      kind === "destinations"
+    );
+  }
+  private modalItems(): Command[] {
+    const modal = this.modal;
+    if (!modal) return [];
+    if (modal.kind === "quick") return this.quickItems();
+    if (modal.kind === "destinations") return this.destinationItems();
+    return this.choices();
+  }
+  private async openQuickOpen() {
+    const workspace = this.workspace();
+    const generation = ++this.quickGeneration;
+    this.quickFiles = this.options.quickFiles ?? [];
+    this.openModal({
+      kind: "quick",
+      title: `Quick open in ${displayName(basename(workspace.path))}`,
+      text: "",
+      index: 0,
+      cancelMode: "app",
+    });
+    if (this.options.quickFiles) return;
+    // Enumerate once, then filter in memory so typing stays responsive.
+    try {
+      const files = await listFiles(workspace.path);
+      if (generation !== this.quickGeneration) return;
+      this.quickFiles = files;
+    } catch (e) {
+      if (generation === this.quickGeneration) this.report(String(e));
+    }
+    if (generation === this.quickGeneration) this.draw();
+  }
+  private quickResults(): string[] {
+    const query = this.modal?.text ?? "";
+    if (!query.trim()) {
+      const recent = this.recents.get(this.workspace().id) ?? [];
+      return [
+        ...recent,
+        ...this.quickFiles.filter((path) => !recent.includes(path)),
+      ].slice(0, 200);
+    }
+    return rank(query, this.quickFiles, 200);
+  }
+  private quickItems(): Command[] {
+    return this.quickResults().map((path) => ({
+      name: path,
+      action: () => this.openQuickFile(path),
+    }));
+  }
+  private rememberRecent(path: string) {
+    const workspace = this.workspace().id;
+    const list = this.recents.get(workspace) ?? [];
+    this.recents.set(workspace, [
+      path,
+      ...list.filter((entry) => entry !== path),
+    ].slice(0, 20));
+  }
+  private async openQuickFile(path: string) {
+    const editor = this.editor();
+    await editor.runtime.editor!.openFile(resolve(this.workspace().path, path));
+    this.rememberRecent(path);
+    this.workspace().activeTab = this.workspace().tabs.find((t) =>
+      t.panes.some((p) => p.id === editor.pane.id),
+    )!.id;
+    this.tab().focused = editor.pane.id;
+    this.filesFocused = false;
+    this.input.mode = "terminal";
+    this.report(`Opened ${displayName(basename(path))}`);
+  }
+  private openDestinations() {
+    this.openModal({
+      kind: "destinations",
+      title: "Go to workspace or tab",
+      text: "",
+      index: 0,
+      cancelMode: "app",
+    });
+  }
+  private destinationItems(): Command[] {
+    const entries: {
+      label: string;
+      workspace: Workspace;
+      tab: string;
+    }[] = [];
+    for (const workspace of this.state.workspaces)
+      for (const tab of workspace.tabs) {
+        const focused =
+          tab.panes.find((pane) => pane.id === tab.focused) ?? tab.panes[0]!;
+        const running = tab.panes.some((pane) => this.runtimes.has(pane.id));
+        entries.push({
+          label: `${displayName(basename(workspace.path))} / ${tab.name} · ${focused.profile}${running ? "" : " · idle"}`,
+          workspace,
+          tab: tab.id,
+        });
+      }
+    const query = (this.modal?.text ?? "").trim();
+    const scored = entries
+      .map((entry, index) => ({
+        entry,
+        index,
+        score: query ? fuzzyScore(query, entry.label) : 0,
+      }))
+      .filter((row) => row.score !== null);
+    scored.sort(
+      (a, b) => (b.score ?? 0) - (a.score ?? 0) || a.index - b.index,
+    );
+    return scored.slice(0, 200).map(({ entry }) => ({
+      name: entry.label,
+      action: () => this.focusDestination(entry.workspace.id, entry.tab),
+    }));
+  }
+  private focusDestination(workspaceId: string, tabId: string) {
+    const workspace = this.state.workspaces.find((w) => w.id === workspaceId);
+    if (!workspace) return;
+    const tab = workspace.tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    this.state.active = workspace.id;
+    workspace.activeTab = tab.id;
+    this.config = loadConfig(workspace.path).config;
+    this.refreshCatalogue();
+    this.filesFocused = false;
+    this.input.mode = "terminal";
+    this.report(
+      `Focused ${displayName(basename(workspace.path))} / ${tab.name}`,
+    );
   }
   private splitter(index: number) {
     const existing = this.splitters[index];
@@ -1618,24 +1778,24 @@ export class App {
         ? Math.max(0, Math.min(slot?.x ?? 0, width - this.overlay.width))
         : 0;
       this.overlay.top = navbar.height;
-      this.overlay.height = Math.max(
+      const overlayHeight = Math.max(
         1,
         isMenu
-          ? Math.min(this.choices().length + 4, height - navbar.height - 1)
+          ? Math.min(this.modalItems().length + 4, height - navbar.height - 1)
           : height - navbar.height - 1,
       );
+      this.overlay.height = overlayHeight;
       const rows = Math.max(
         1,
-        this.overlay.height -
-          (m.kind === "palette" || m.kind === "input" ? 5 : 4),
+        overlayHeight - (App.hasInput(m.kind) ? 5 : 4),
       );
       const lines = this.modalLines();
       const start =
-        m.kind === "palette" || isMenu
+        App.hasInput(m.kind) || isMenu
           ? Math.max(0, m.index - rows + 1)
           : Math.min(m.index, Math.max(0, lines.length - rows));
       this.menuStart = start;
-      this.overlayText.content = `${m.title}\n${m.kind === "palette" || m.kind === "input" ? "> " + m.text + "\n" : ""}${lines.slice(start, start + rows).join("\n")}\n${isMenu ? (this.overlay.width < 40 ? "←→ menu · ↑↓ Enter Esc" : "←→ menu · ↑↓ select · Enter · Esc") : this.overlay.width < 40 ? "↑↓ scroll · Enter · Esc" : "Esc cancel · ↑↓ scroll · Enter select"}`;
+      this.overlayText.content = `${m.title}\n${App.hasInput(m.kind) ? "> " + m.text + "\n" : ""}${lines.slice(start, start + rows).join("\n")}\n${isMenu ? (this.overlay.width < 40 ? "←→ menu · ↑↓ Enter Esc" : "←→ menu · ↑↓ select · Enter · Esc") : this.overlay.width < 40 ? "↑↓ scroll · Enter · Esc" : "Esc cancel · ↑↓ scroll · Enter select"}`;
     }
   };
   async shutdown(force = false): Promise<void> {

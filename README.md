@@ -65,11 +65,25 @@ Press **Ctrl-G**, then **p** to open the command palette. Start an agent, add a
 Yazi or Hunk pane, create a tab, open a workspace, or run a configured task.
 The palette can be filtered by typing. Escape closes it.
 
+Press **Ctrl-G**, then **o** for Quick Open: type a fragment of a filename and
+the ranked matches open in the existing Neovim. Ranking is by fuzzy score, and an
+empty query lists the files you opened most recently first. In a Git repository
+the candidates come from `git ls-files --cached --others --exclude-standard`, so
+your own ignore rules decide what is offered; anywhere else a fixed skip list
+(`.git`, `.under`, `node_modules`, `dist`, `build`, `target`, `.cache`, `.venv`,
+`vendor`) is used and the walk is bounded.
+
+Press **Ctrl-G**, then **g** to list every workspace and tab — including tabs
+whose processes are hidden or stopped — and focus the one you choose. Focusing a
+destination never restarts or reloads a tool.
+
 | Navigation mode key | Action                                                   |
 | ------------------- | -------------------------------------------------------- |
 | Ctrl-G              | Enter navigation; press again to send one literal Ctrl-G |
 | Escape              | Return to the focused terminal                           |
 | m                   | Top menu                                                 |
+| o                   | Quick open a file in this workspace                      |
+| g                   | Go to a workspace or tab                                 |
 | f                   | Focus native Yazi or the fallback file list                |
 | r / s               | Working tree / staged diff in Hunk                        |
 | l                   | Redraw all terminal panes                                 |

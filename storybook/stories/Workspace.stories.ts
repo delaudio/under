@@ -146,3 +146,15 @@ export const TemplateCompose = {
 export const ReviewScoped = {
   render: () => terminalPreview("review-scoped"),
 } satisfies StoryObj;
+
+export const QuickOpen = {
+  render: () => terminalPreview("quick-open"),
+} satisfies StoryObj;
+
+export const QuickOpenNarrow = {
+  render: () => terminalPreview("quick-open-narrow"),
+} satisfies StoryObj;
+
+export const Destinations = {
+  render: () => terminalPreview("destinations"),
+} satisfies StoryObj;
