@@ -157,4 +157,11 @@ export const catalog = [
     height: 30,
     state: "context",
   },
+  {
+    id: "resize-drag",
+    export: "ResizeDrag",
+    width: 120,
+    height: 30,
+    state: "resize-drag",
+  },
 ] as const;

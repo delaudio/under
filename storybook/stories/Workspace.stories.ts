@@ -99,3 +99,7 @@ export const NativeFiles = {
 export const ReviewMenu = {
   render: () => terminalPreview("review-menu"),
 } satisfies StoryObj;
+
+export const ResizeDrag = {
+  render: () => terminalPreview("resize-drag"),
+} satisfies StoryObj;

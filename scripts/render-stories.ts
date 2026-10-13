@@ -4,6 +4,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { App, type PaneHost, type PaneEditor } from "../src/app.ts";
 import { defaults } from "../src/config.ts";
 import { MENU_LABELS, menuSlots } from "../src/menu.ts";
+import { splitHandles } from "../src/model.ts";
 import { catalog } from "../storybook/catalog.ts";
 import type { Phase } from "../src/pty.ts";
 
@@ -138,6 +139,18 @@ for (const spec of catalog) {
     if (spec.state === "native-files") {
       navigate();
       key("f");
+    }
+    if (spec.state === "resize-drag") {
+      // Freeze a resize in progress so the dragged boundary is captured mid-drag.
+      await setup.flush();
+      const boundary = splitHandles(app.tab().layout, {
+        x: 0,
+        y: 2,
+        width: spec.width,
+        height: spec.height - 3,
+      })[0]!.boundary;
+      await setup.mockMouse.pressDown(boundary, 12);
+      await setup.mockMouse.emitMouseEvent("drag", boundary + 14, 12);
     }
     if (spec.state === "context") {
       navigate();

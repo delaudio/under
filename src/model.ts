@@ -82,6 +82,11 @@ export function remove(layout: Layout, id: string): Layout | null {
     second = remove(layout.second, id);
   return !first ? second : !second ? first : { ...layout, first, second };
 }
+export const MIN_RATIO = 0.15;
+export const MAX_RATIO = 0.85;
+/** Keep a split ratio inside the range the state validator accepts. */
+export const clampRatio = (value: number) =>
+  Math.min(MAX_RATIO, Math.max(MIN_RATIO, value));
 export function resize(layout: Layout, target: string, delta: number): Layout {
   if ("pane" in layout) return layout;
   const has = (l: Layout): boolean =>
@@ -91,9 +96,8 @@ export function resize(layout: Layout, target: string, delta: number): Layout {
     if ("pane" in child)
       return {
         ...layout,
-        ratio: Math.min(
-          0.85,
-          Math.max(0.15, layout.ratio + (has(layout.first) ? delta : -delta)),
+        ratio: clampRatio(
+          layout.ratio + (has(layout.first) ? delta : -delta),
         ),
       };
     return {
@@ -103,6 +107,69 @@ export function resize(layout: Layout, target: string, delta: number): Layout {
     };
   }
   return layout;
+}
+export type SplitPath = ("first" | "second")[];
+export type SplitHandle = {
+  path: SplitPath;
+  axis: "row" | "column";
+  /** Boundary coordinate on the split axis, in absolute cells. */
+  boundary: number;
+  /** Absolute start and end of the handle along the cross axis. */
+  span: { start: number; end: number };
+  /** Split-axis origin and size, used to turn a pointer cell into a fraction. */
+  origin: number;
+  size: number;
+};
+/** Draggable boundaries a layout exposes, mirroring rectangles() geometry. */
+export function splitHandles(layout: Layout, rect: Rect): SplitHandle[] {
+  const handles: SplitHandle[] = [];
+  const walk = (l: Layout, r: Rect, path: SplitPath) => {
+    if ("pane" in l) return;
+    const size = l.axis === "row" ? r.width : r.height;
+    if (size < 8) return;
+    const first = Math.max(4, Math.min(size - 4, Math.floor(size * l.ratio)));
+    const row = l.axis === "row";
+    handles.push({
+      path,
+      axis: l.axis,
+      boundary: (row ? r.x : r.y) + first,
+      span: row
+        ? { start: r.y, end: r.y + r.height }
+        : { start: r.x, end: r.x + r.width },
+      origin: row ? r.x : r.y,
+      size,
+    });
+    if (row) {
+      walk(l.first, { ...r, width: first }, [...path, "first"]);
+      walk(
+        l.second,
+        { ...r, x: r.x + first, width: size - first },
+        [...path, "second"],
+      );
+    } else {
+      walk(l.first, { ...r, height: first }, [...path, "first"]);
+      walk(
+        l.second,
+        { ...r, y: r.y + first, height: size - first },
+        [...path, "second"],
+      );
+    }
+  };
+  walk(layout, rect, []);
+  return handles;
+}
+/** Set the ratio of the split at `path`, clamped to the safe range. */
+export function setSplitRatio(
+  layout: Layout,
+  path: SplitPath,
+  fraction: number,
+): Layout {
+  if ("pane" in layout) return layout;
+  const [head, ...rest] = path;
+  if (head === undefined) return { ...layout, ratio: clampRatio(fraction) };
+  return head === "first"
+    ? { ...layout, first: setSplitRatio(layout.first, rest, fraction) }
+    : { ...layout, second: setSplitRatio(layout.second, rest, fraction) };
 }
 export type Rect = { x: number; y: number; width: number; height: number };
 export function rectangles(layout: Layout, rect: Rect): Map<string, Rect> {

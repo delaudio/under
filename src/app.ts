@@ -4,6 +4,7 @@ import {
   EmbeddedTerminalRenderable,
   type CliRenderer,
   type KeyEvent,
+  type MouseEvent,
   type PasteEvent,
 } from "@opentui/core";
 import { stat, writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
@@ -32,8 +33,12 @@ import {
   remove,
   resize,
   rectangles,
+  splitHandles,
+  setSplitRatio,
   leaf,
   type Pane,
+  type SplitHandle,
+  type SplitPath,
   type Workspace,
 } from "./model.ts";
 
@@ -96,6 +101,16 @@ export class App {
   private browsers = new Map<string, FileBrowser>();
   private menuButtons: TextRenderable[] = [];
   private menuStart = 0;
+  private handles: SplitHandle[] = [];
+  private splitters: BoxRenderable[] = [];
+  private drag?: {
+    key: string;
+    path: SplitPath;
+    axis: "row" | "column";
+    origin: number;
+    size: number;
+  };
+  private hoverSplit = -1;
   private chatHidden = false;
   private message = "Ctrl-G m: menu · f: files · p: commands";
   private shutdownPromise?: Promise<void>;
@@ -518,6 +533,14 @@ export class App {
       borderColor: this.config.accent,
       flexDirection: "column",
       overflow: "hidden",
+      // A boundary drag can hand pointer capture to a pane instead of the
+      // splitter; continue the drag from whichever pane receives it.
+      onMouseDrag: (event) => {
+        event.stopPropagation();
+        this.applyDrag(event);
+      },
+      onMouseUp: () => this.endDrag(),
+      onMouseDragEnd: () => this.endDrag(),
     });
     const title = new TextRenderable(this.renderer, {
       id: `title-${pane.id}`,
@@ -820,7 +843,7 @@ export class App {
     this.openModal({
       kind: "help",
       title: "Under shortcuts",
-      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  Tab/j/k: cycle panes\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
+      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  Tab/j/k: cycle panes\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
       index: 0,
       cancelMode: "app",
     });
@@ -1145,6 +1168,70 @@ export class App {
     }
     this.draw();
   };
+  private splitter(index: number) {
+    const existing = this.splitters[index];
+    if (existing) return existing;
+    const box = new BoxRenderable(this.renderer, {
+      id: `split-${index}`,
+      position: "absolute",
+      visible: false,
+      zIndex: 40,
+      onMouseDown: (event) => {
+        event.stopPropagation();
+        this.beginDrag(index, event);
+      },
+      onMouseDrag: (event) => {
+        event.stopPropagation();
+        this.applyDrag(event);
+      },
+      onMouseDragEnd: () => this.endDrag(),
+      onMouseUp: () => this.endDrag(),
+      onMouseOver: () => {
+        if (this.hoverSplit !== index) {
+          this.hoverSplit = index;
+          this.draw();
+        }
+      },
+      onMouseOut: () => {
+        if (this.hoverSplit === index) {
+          this.hoverSplit = -1;
+          this.draw();
+        }
+      },
+    });
+    this.splitters[index] = box;
+    this.renderer.root.add(box);
+    return box;
+  }
+  private beginDrag(index: number, event: MouseEvent) {
+    if (this.modal) return;
+    const handle = this.handles[index];
+    if (!handle) return;
+    this.drag = {
+      key: handle.path.join("."),
+      path: handle.path,
+      axis: handle.axis,
+      origin: handle.origin,
+      size: handle.size,
+    };
+    this.applyDrag(event);
+  }
+  private applyDrag(event: MouseEvent) {
+    const drag = this.drag;
+    if (!drag) return;
+    const pointer = drag.axis === "row" ? event.x : event.y;
+    this.tab().layout = setSplitRatio(
+      this.tab().layout,
+      drag.path,
+      (pointer - drag.origin) / drag.size,
+    );
+    this.draw();
+  }
+  private endDrag() {
+    if (!this.drag) return;
+    this.drag = undefined;
+    this.draw();
+  }
   draw = () => {
     if (this.disposed) return;
     const width = this.renderer.width,
@@ -1255,6 +1342,12 @@ export class App {
           position: "absolute",
           border: true,
           borderColor: this.config.accent,
+          onMouseDrag: (event) => {
+            event.stopPropagation();
+            this.applyDrag(event);
+          },
+          onMouseUp: () => this.endDrag(),
+          onMouseDragEnd: () => this.endDrag(),
         });
         const text = new TextRenderable(this.renderer, {
           id: `placeholder-text-${id}`,
@@ -1308,6 +1401,29 @@ export class App {
         r.view.focus();
       else r.view.blur();
     }
+    // Draggable boundaries sit above the panes so grabbing one never reaches a
+    // tool's own mouse handling. They stay transparent until hovered or dragged,
+    // so an idle workspace renders exactly as before.
+    this.handles = side >= width ? [] : splitHandles(visibleLayout, rect);
+    for (const [index, handle] of this.handles.entries()) {
+      const box = this.splitter(index);
+      const row = handle.axis === "row";
+      // Keep the handle off the panes' outer border row/column so highlighting a
+      // boundary never erases the frame outline.
+      box.visible = true;
+      box.left = row ? handle.boundary - 1 : handle.span.start + 1;
+      box.top = row ? handle.span.start + 1 : handle.boundary - 1;
+      box.width = row ? 2 : Math.max(1, handle.span.end - handle.span.start - 2);
+      box.height = row ? Math.max(1, handle.span.end - handle.span.start - 2) : 2;
+      box.backgroundColor =
+        this.drag?.key === handle.path.join(".")
+          ? this.config.accent
+          : this.hoverSplit === index
+            ? "#3a3a44"
+            : undefined;
+    }
+    for (const box of this.splitters.slice(this.handles.length))
+      box.visible = false;
     // A dormant pane is visible as a placeholder, without executing anything.
     this.overlay.visible = !!this.modal;
     if (this.modal) {
