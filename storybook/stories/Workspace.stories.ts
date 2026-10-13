@@ -158,3 +158,7 @@ export const QuickOpenNarrow = {
 export const Destinations = {
   render: () => terminalPreview("destinations"),
 } satisfies StoryObj;
+
+export const PreviewDestination = {
+  render: () => terminalPreview("preview-destination"),
+} satisfies StoryObj;

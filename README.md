@@ -202,10 +202,15 @@ permission prompts. Custom agent profiles are supported.
 
 “Preview file/selection/diagnostics context for agent” captures Neovim's live
 buffer, including unsaved changes. “Preview current file diff” captures the
-working-tree diff on disk. Preview shows the target agent and payload.
-Enter pastes the context into that agent; **review and submit it in the native
-CLI**. Under does not assume that pressing Enter has identical semantics across
-providers. A changed buffer or diff invalidates the preview.
+working-tree diff on disk. When more than one agent is running in the workspace
+you choose the destination first; the list names each agent by provider, pane and
+tab so repeated profiles stay distinguishable. Preview then shows the chosen
+destination and the exact payload. Enter pastes the context into that agent and
+focuses its tab; **review and submit it in the native CLI**. Under does not
+assume that pressing Enter has identical semantics across providers. A changed
+buffer or diff invalidates the preview, and an agent that exited or was replaced
+requires a new choice rather than silently receiving the payload somewhere else.
+The choice is remembered per workspace for as long as that agent is running.
 
 The pane status is a process state, such as `running` or `exited`. It does not
 claim that a running agent is thinking, waiting for approval, or finished with

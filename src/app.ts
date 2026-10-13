@@ -47,6 +47,7 @@ import {
   type Pane,
   type SplitHandle,
   type SplitPath,
+  type Tab,
   type Workspace,
 } from "./model.ts";
 
@@ -78,7 +79,15 @@ type Command = {
   checked?: boolean;
 };
 type Modal = {
-  kind: "palette" | "menu" | "input" | "preview" | "help" | "quick" | "destinations";
+  kind:
+    | "palette"
+    | "menu"
+    | "input"
+    | "preview"
+    | "help"
+    | "quick"
+    | "destinations"
+    | "agents";
   menu?: MenuLabel;
   title: string;
   text: string;
@@ -125,6 +134,16 @@ export class App {
   private quickFiles: string[] = [];
   private quickGeneration = 0;
   private recents = new Map<string, string[]>();
+  /** Preview payload waiting for the user to choose a destination agent. */
+  private pendingPreview?: {
+    text: string;
+    snapshot: EditorSnapshot;
+    diff?: string;
+    cwd: string;
+    editor: PaneEditor;
+  };
+  /** Last destination chosen per workspace, so a repeat needs no prompt. */
+  private rememberedAgent = new Map<string, string>();
   private chatHidden = false;
   private message = "Ctrl-G m: menu · f: files · p: commands";
   private shutdownPromise?: Promise<void>;
@@ -1000,6 +1019,78 @@ export class App {
       cancelMode: "app",
     });
   }
+  /** Running agents anywhere in the workspace, with their tab. */
+  private previewAgents(): { pane: Pane; tab: Tab }[] {
+    const found: { pane: Pane; tab: Tab }[] = [];
+    for (const tab of this.workspace().tabs)
+      for (const pane of tab.panes)
+        if (
+          pane.kind === "agent" &&
+          this.runtimes.get(pane.id)?.host.phase === "running"
+        )
+          found.push({ pane, tab });
+    return found;
+  }
+  private agentLabel(pane: Pane, tab: Tab) {
+    const index = tab.panes.findIndex((entry) => entry.id === pane.id) + 1;
+    // Name the tab whenever more than one exists, so repeated profiles and
+    // repeated pane numbers in different tabs stay distinguishable.
+    const suffix =
+      this.workspace().tabs.length > 1 || tab.id !== this.tab().id
+        ? ` · tab "${tab.name}"`
+        : "";
+    return `${pane.profile} · pane ${index}${suffix}`;
+  }
+  private agentItems(): Command[] {
+    return this.previewAgents().map(({ pane, tab }) => ({
+      name: this.agentLabel(pane, tab),
+      action: () => this.showPreview(pane, tab),
+    }));
+  }
+  private showPreview(target: Pane, tab: Tab) {
+    const pending = this.pendingPreview;
+    if (!pending) return;
+    this.pendingPreview = undefined;
+    this.rememberedAgent.set(this.workspace().id, target.id);
+    this.openModal({
+      kind: "preview",
+      title: `Context for ${this.agentLabel(target, tab)} — Enter pastes; submit in native CLI`,
+      text: pending.text,
+      index: 0,
+      snapshot: pending.snapshot,
+      editor: pending.editor,
+      cancelMode: "app",
+      submit: async () => {
+        // A destination that exited, was removed or was replaced needs a fresh
+        // selection rather than a silent retarget.
+        const runtime = this.runtimes.get(target.id);
+        if (
+          !runtime ||
+          runtime.host.phase !== "running" ||
+          !tab.panes.some((pane) => pane.id === target.id)
+        )
+          throw new Error(
+            "That agent is no longer running; choose a destination again",
+          );
+        if (!sameSnapshot(pending.snapshot, await pending.editor.snapshot()))
+          throw new Error("Editor context changed; generate a new preview");
+        if (
+          pending.diff !== undefined &&
+          pending.diff !== (await fileDiff(pending.cwd, pending.snapshot.path))
+        )
+          throw new Error("Diff changed; generate a new preview");
+        runtime.host.write(
+          runtime.view.encodePaste(new TextEncoder().encode(pending.text)),
+        );
+        this.state.active = this.workspace().id;
+        this.workspace().activeTab = tab.id;
+        tab.focused = target.id;
+        this.filesFocused = false;
+        this.input.mode = "terminal";
+        this.message = "Context pasted. Review and submit in the agent CLI.";
+      },
+    });
+  }
   private async preview(kind: ContextKind | "diff") {
     const editor = this.editor().runtime.editor!;
     const snapshot = await editor.snapshot();
@@ -1011,32 +1102,25 @@ export class App {
       diff !== undefined
         ? `Working tree diff (disk content, not unsaved buffer): ${snapshot.path}\n\n${diff}`
         : contextText(snapshot, kind as ContextKind);
-    const target = this.tab().panes.find(
-      (p) =>
-        p.kind === "agent" && this.runtimes.get(p.id)?.host.phase === "running",
+    const agents = this.previewAgents();
+    if (!agents.length)
+      throw new Error(
+        "No running agent in this workspace; start one before previewing context",
+      );
+    this.pendingPreview = { text, snapshot, diff, cwd, editor };
+    const remembered = agents.find(
+      ({ pane }) => pane.id === this.rememberedAgent.get(this.workspace().id),
     );
-    if (!target) throw new Error("Start an agent in the current tab first");
+    // A single destination, or the remembered one, needs no prompt.
+    if (remembered) return this.showPreview(remembered.pane, remembered.tab);
+    if (agents.length === 1)
+      return this.showPreview(agents[0]!.pane, agents[0]!.tab);
     this.openModal({
-      kind: "preview",
-      title: `Context for ${target.profile} — Enter pastes; submit in native CLI`,
-      text,
+      kind: "agents",
+      title: "Choose the agent that receives this context",
+      text: "",
       index: 0,
-      snapshot,
-      editor,
       cancelMode: "app",
-      submit: async () => {
-        if (!sameSnapshot(snapshot, await editor.snapshot()))
-          throw new Error("Editor context changed; generate a new preview");
-        if (diff !== undefined && diff !== (await fileDiff(cwd, snapshot.path)))
-          throw new Error("Diff changed; generate a new preview");
-        const r = this.runtimes.get(target.id);
-        if (!r || r.host.phase !== "running")
-          throw new Error("Target agent is no longer running");
-        r.host.write(r.view.encodePaste(new TextEncoder().encode(text)));
-        this.tab().focused = target.id;
-        this.input.mode = "terminal";
-        this.message = "Context pasted. Review and submit in the agent CLI.";
-      },
     });
   }
   private openModal(modal: Modal) {
@@ -1048,6 +1132,9 @@ export class App {
   }
   private closeModal() {
     const previous = this.modal?.cancelMode ?? "app";
+    // Dismissing the destination picker abandons the payload, but selecting a
+    // row closes the picker first and still needs it for the preview.
+    if (this.modal?.kind !== "agents") this.pendingPreview = undefined;
     this.modal = undefined;
     // Cancels an in-flight Quick Open enumeration so stale results are dropped.
     this.quickGeneration++;
@@ -1107,7 +1194,8 @@ export class App {
       kind === "palette" ||
       kind === "menu" ||
       kind === "quick" ||
-      kind === "destinations"
+      kind === "destinations" ||
+      kind === "agents"
     );
   }
   private modalLines() {
@@ -1374,6 +1462,7 @@ export class App {
     if (!modal) return [];
     if (modal.kind === "quick") return this.quickItems();
     if (modal.kind === "destinations") return this.destinationItems();
+    if (modal.kind === "agents") return this.agentItems();
     return this.choices();
   }
   private async openQuickOpen() {
@@ -1791,7 +1880,7 @@ export class App {
       );
       const lines = this.modalLines();
       const start =
-        App.hasInput(m.kind) || isMenu
+        App.isList(m.kind) || isMenu
           ? Math.max(0, m.index - rows + 1)
           : Math.min(m.index, Math.max(0, lines.length - rows));
       this.menuStart = start;

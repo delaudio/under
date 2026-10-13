@@ -21,8 +21,8 @@ use `--clean` or disable automatic initial editor launch. Directory containment,
 wrapped-menu mouse positions and unavailable agent actions have native tests.
 
 On 2026-10-12, local macOS arm64 verification with Bun 1.4.3 and Neovim
-0.12.5 passed strict checking, all 71 native tests with no skips, Storybook
-checking/build, and all 47 browser checks (46 screenshot comparisons and one
+0.12.5 passed strict checking, all 75 native tests with no skips, Storybook
+checking/build, and all 48 browser checks (47 screenshot comparisons and one
 catalog/inventory check). Baselines were inspected before comparison. A separate
 local probe confirmed startup and input with the owner's ordinary Neovim
 configuration without saving file changes. The in-band resize-report adapter has
@@ -31,7 +31,7 @@ after a pane resize (expected 55×26, observed 70×34). This is local evidence; 
 new CI workflow has not yet run for these uncommitted changes.
 
 The browser visual gate renders the production App and terminal panes into
-46 native frames and compares Chromium element screenshots. See
+47 native frames and compares Chromium element screenshots. See
 [coverage and limitations](../storybook/COVERAGE.md). The visual CI job uses
 macOS baselines; the native CI job retains Linux and macOS tool checks.
 

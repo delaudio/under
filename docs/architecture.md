@@ -135,6 +135,13 @@ continue to require an explicit action; restore launches no processes.
 Quick Open and the destination switcher are two more list modals on the same
 machinery: `modalItems()` returns the rows for whichever modal is open, so
 filtering, arrows, paging, mouse clicks and paste behave identically everywhere.
+The context preview uses the same machinery for its destination picker: running
+agents are listed across every tab of the workspace, and the payload waits in
+`pendingPreview` until a row is chosen. Dismissing the picker drops it, while
+selecting a row closes the picker first and still needs it, so the payload is
+only discarded when the picker was not the modal being closed. The chosen
+destination is remembered per workspace, and confirmation re-checks that the pane
+is still the same running agent before pasting.
 `src/search.ts` owns the file side: `listFiles()` prefers
 `git ls-files --cached --others --exclude-standard` so a repository's ignore
 rules decide the candidates, falls back to a bounded walk with a fixed skip list,

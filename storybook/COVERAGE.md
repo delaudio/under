@@ -1,6 +1,6 @@
 # TUI visual coverage
 
-46 stories capture the production OpenTUI App through its native test renderer.
+47 stories capture the production OpenTUI App through its native test renderer.
 The browser preview preserves text, foreground/background, bold, italic,
 underline and cell widths; it uses bundled JetBrains Mono at 15px, 9×20px cells.
 
@@ -13,7 +13,7 @@ underline and cell widths; it uses bundled JetBrains Mono at 15px, 9×20px cells
 | Overlay | Command palette, help wide/tiny, open-file form, editor error and context preview |
 | Search | Quick Open results at wide and narrow widths; the workspace/tab switcher |
 | Review | A review scoped to a revision, shown by the pane title and the tab name |
-| Agent | Idle chooser; synthetic Codex/Claude/OpenCode sessions; exited, stopping and error |
+| Agent | Idle chooser; synthetic Codex/Claude/OpenCode sessions; exited, stopping and error; choosing which running agent receives a context preview |
 | Terminal | ANSI truecolor, Unicode/wide cells, bold, italic and underline in the real terminal renderable |
 
 ## Reproduce
