@@ -78,6 +78,7 @@ The palette can be filtered by typing. Escape closes it.
 | t / w               | Next tab / workspace                                     |
 | z                   | Toggle focused-pane zoom                                 |
 | [ / ]               | Shrink / grow focused split                              |
+| drag a pane border  | Resize that split with the mouse                        |
 | b                   | Toggle workspace sidebar                                 |
 | ?                   | Shortcut help                                            |
 | q                   | Save layout and quit after checking unsaved buffers      |
@@ -95,6 +96,8 @@ Start stopped tools explicitly through the menus or palette; Enter also starts
 a focused stopped pane. Selecting a provider reuses the idle chat pane. New tabs do not execute
 commands. Tabs and hidden panes preserve running processes and terminal state.
 Use splits, zoom, resizing and “Move pane to new tab” to change the layout.
+Drag a pane border to resize that split; the panes on either side and their
+running tools resize live, and the ratio is saved with the layout.
 At 80 columns or wider the file panel appears beside the editor/chat split.
 Below 80 columns it collapses; Ctrl-G f reveals it. Below 60 columns, or in a
 very short terminal, Under shows the focused tool; Ctrl-G Tab switches tools.

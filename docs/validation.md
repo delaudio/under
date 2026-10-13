@@ -21,8 +21,8 @@ use `--clean` or disable automatic initial editor launch. Directory containment,
 wrapped-menu mouse positions and unavailable agent actions have native tests.
 
 On 2026-10-12, local macOS arm64 verification with Bun 1.4.3 and Neovim
-0.12.5 passed strict checking, all 38 native tests with no skips, Storybook
-checking/build, and all 32 browser checks (31 screenshot comparisons and one
+0.12.5 passed strict checking, all 43 native tests with no skips, Storybook
+checking/build, and all 33 browser checks (32 screenshot comparisons and one
 catalog/inventory check). Baselines were inspected before comparison. A separate
 local probe confirmed startup and input with the owner's ordinary Neovim
 configuration without saving file changes. The in-band resize-report adapter has
@@ -31,7 +31,7 @@ after a pane resize (expected 55×26, observed 70×34). This is local evidence; 
 new CI workflow has not yet run for these uncommitted changes.
 
 The browser visual gate renders the production App and terminal panes into
-31 native frames and compares Chromium element screenshots. See
+32 native frames and compares Chromium element screenshots. See
 [coverage and limitations](../storybook/COVERAGE.md). The visual CI job uses
 macOS baselines; the native CI job retains Linux and macOS tool checks.
 
@@ -62,6 +62,7 @@ Coverage includes:
 - themed Yazi configuration isolation and opening through the existing editor bridge;
 - working/staged Review tab reuse, retained modified buffers, missing-tool/non-Git feedback;
 - cursor-only updates, background output, menu ownership, clipping and resize with live panes;
+- dragging a split boundary with the mouse resizes it, clamps at the minimum and maximum, keeps focus and sends no terminal input;
 - RPC teardown races reject in-flight requests without an unhandled rejection;
 - quit confirms editor exit from the editor socket and the process table, not only the PTY exit event;
 - the lockfile resolves packages from the public registry only, so a mirror or private registry cannot be published with it;

@@ -118,6 +118,15 @@ remains owned by the focused visible terminal. The real Neovim regression test
 checks its actual rows/columns, arrow-key scrolling, visible line order, cursor
 position, background output and resize/zoom transitions.
 
+Pane resizing works from the mouse and the keyboard. `splitHandles()` derives the
+draggable boundaries from the same rectangle geometry the panes are laid out
+with, and `setSplitRatio()` adjusts one split by path inside the range the state
+validator accepts. A transparent overlay renderable sits on each boundary, above
+the panes and below modals; it highlights on hover, captures the drag and never
+lets a grab reach a tool's own mouse handling. Pointer capture can land on a pane
+mid-drag, so pane frames continue the same drag. Pane borders keep their glyphs
+because the handle is inset from the outline.
+
 Top menus and the palette share the same commands and availability checks.
 Menu cell positions are recalculated after resize and wrapping. Dropdowns and
 forms own input until dismissed. Project-defined commands and agent launches
