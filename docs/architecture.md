@@ -132,6 +132,18 @@ Menu cell positions are recalculated after resize and wrapping. Dropdowns and
 forms own input until dismissed. Project-defined commands and agent launches
 continue to require an explicit action; restore launches no processes.
 
+Layout templates are a catalogue in `src/model.ts`: each names the panes it shows
+and the layout over them, in the order the tab already holds. `applyTemplate()`
+reuses a pane of the required kind, preferring one that is currently visible, and
+only falls back to creating a stopped placeholder. It never starts, stops or
+reloads a pane, so a chat thread and unsaved editor buffers survive switching
+templates. Because a template arranges a subset, a tab's layout may reference
+fewer panes than it holds; the panes left out are hidden and keep running, and
+state validation accepts that while still requiring every leaf to be a pane and
+the focused pane to be visible. Keyboard cycling walks the visible layout order,
+so hidden panes stay out of the way. `config.preset` still selects the workspace's
+initial template.
+
 The Storybook generator injects synthetic configuration/files and read-only
 PTY/editor adapters into the production App. OpenTUI captures cell colors,
 attributes and widths. Browser Storybook only imports those generated frames,

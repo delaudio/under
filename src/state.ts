@@ -70,7 +70,10 @@ export function validateState(v: any): State {
         }
       }
       tree(t.layout, 0);
-      if (leaves.size !== t.panes.length || !leaves.has(t.focused))
+      // Panes outside the layout remain in the tab as hidden panes, so the layout
+      // may reference a subset. Every leaf must still be a pane, and the focused
+      // pane must be one of them.
+      if (!leaves.has(t.focused))
         throw new Error("Invalid focus or pane list");
     }
     if (!w.tabs.some((t: any) => t.id === w.activeTab))
@@ -101,6 +104,7 @@ export function validateState(v: any): State {
         focused: t.focused,
         zoom: t.zoom,
         layout: cleanLayout(t.layout),
+        ...(typeof t.template === "string" ? { template: t.template } : {}),
         panes: t.panes.map((p: any) => ({
           id: p.id,
           kind: p.kind,

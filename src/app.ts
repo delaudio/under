@@ -35,10 +35,15 @@ import {
   rectangles,
   splitHandles,
   setSplitRatio,
+  applyTemplate,
+  paneOrder,
   leaf,
+  TEMPLATE_ORDER,
+  TEMPLATES,
   type Pane,
   type SplitHandle,
   type SplitPath,
+  type TemplateName,
   type Workspace,
 } from "./model.ts";
 
@@ -674,7 +679,10 @@ export class App {
           () => this.add("task", k),
         ),
       ),
-      ...(["code", "review", "run"] as const).map((name) =>
+      ...TEMPLATE_ORDER.map((name, index) =>
+        cmd(`Layout: ${name} (${index + 1})`, () => this.applyLayout(name)),
+      ),
+      ...TEMPLATE_ORDER.map((name) =>
         cmd(`New ${name} tab`, () => {
           const t = preset(name);
           this.workspace().tabs.push(t);
@@ -843,7 +851,7 @@ export class App {
     this.openModal({
       kind: "help",
       title: "Under shortcuts",
-      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  Tab/j/k: cycle panes\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
+      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  Tab/j/k: cycle panes\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize  1-9: layouts\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
       index: 0,
       cancelMode: "app",
     });
@@ -933,7 +941,7 @@ export class App {
       if (label === "File")
         return /^(Open |New |Next |Close current|Save |Quit)/.test(c.name);
       if (label === "View")
-        return /^(Toggle |Grow |Shrink |Move |Close focused|Focus files|Refresh files)/.test(
+        return /^(Toggle |Grow |Shrink |Move |Close focused|Focus files|Refresh files|Layout: )/.test(
           c.name,
         );
       if (label === "Review")
@@ -1133,13 +1141,11 @@ export class App {
       if (["tab", "j", "k"].includes(key.name)) {
         this.filesFocused = false;
         const step = key.name === "k" || key.shift ? -1 : 1;
-        t.focused =
-          t.panes[
-            (t.panes.findIndex((p) => p.id === t.focused) +
-              step +
-              t.panes.length) %
-              t.panes.length
-          ]!.id;
+        // Cycle only the panes the active template shows; hidden panes keep
+        // running without being reachable from the keyboard.
+        const order = paneOrder(t.layout);
+        const index = order.indexOf(t.focused);
+        t.focused = order[(index + step + order.length) % order.length]!;
       } else if (key.name === "m") this.openMenu("File");
       else if (key.name === "f") this.focusFiles();
       else if (key.name === "r") this.run(() => this.openReview(false));
@@ -1163,11 +1169,20 @@ export class App {
       } else if (key.name === "[")
         t.layout = resize(t.layout, t.focused, -0.05);
       else if (key.name === "]") t.layout = resize(t.layout, t.focused, 0.05);
+      else if (/^[1-9]$/.test(key.name))
+        this.applyLayout(TEMPLATE_ORDER[Number(key.name) - 1]);
       else if (key.name === "q") this.run(() => this.shutdown(), true);
       else if (key.name === "?") this.help();
     }
     this.draw();
   };
+  private applyLayout(name?: TemplateName) {
+    if (!name) return;
+    const agent =
+      this.tab().panes.find((pane) => pane.kind === "agent")?.profile ?? "codex";
+    applyTemplate(this.tab(), name, agent);
+    this.report(`Layout: ${TEMPLATES[name].label}`);
+  }
   private splitter(index: number) {
     const existing = this.splitters[index];
     if (existing) return existing;

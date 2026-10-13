@@ -11,6 +11,8 @@ export type Tab = {
   layout: Layout;
   focused: string;
   zoom: boolean;
+  /** Template that produced the visible arrangement, when one is applied. */
+  template?: TemplateName;
 };
 export type Workspace = {
   id: string;
@@ -23,39 +25,183 @@ export const leaf = (pane: Pane): Layout => ({ pane: pane.id });
 export function createPane(kind: PaneKind, profile: string = kind): Pane {
   return { id: uid(), kind, profile };
 }
-export function preset(name: "code" | "review" | "run", agent = "codex"): Tab {
-  const panes =
-    name === "run"
-      ? [createPane("shell")]
-      : [
-          createPane(name === "code" ? "nvim" : "hunk"),
-          createPane("agent", agent),
-        ];
-  if (name === "code") panes.push(createPane("yazi"));
-  const main: Layout =
-    panes.length === 1
-      ? leaf(panes[0]!)
-      : {
-          axis: "row",
-          ratio: 0.65,
-          first: leaf(panes[0]!),
-          second: leaf(panes[1]!),
-        };
+export type TemplateName =
+  | "chat"
+  | "code"
+  | "files-editor"
+  | "review"
+  | "files-review"
+  | "editor-chat"
+  | "editor"
+  | "run"
+  | "editor-chat-stack";
+export type TemplateSlot = { kind: PaneKind; profile: string };
+export type Template = {
+  label: string;
+  /** Panes the template shows, in tab order; reused panes keep their identity. */
+  slots: TemplateSlot[];
+  /** Slot that receives focus when the current focus is not part of the template. */
+  focus: number;
+  layout: (id: (index: number) => string) => Layout;
+};
+/** Shortcut order: the digit after the navigation prefix applies each template. */
+export const TEMPLATE_ORDER: TemplateName[] = [
+  "chat",
+  "code",
+  "files-editor",
+  "review",
+  "files-review",
+  "editor-chat",
+  "editor",
+  "run",
+  "editor-chat-stack",
+];
+const at = (pane: string): Layout => ({ pane });
+const row = (ratio: number, first: Layout, second: Layout): Layout => ({
+  axis: "row",
+  ratio,
+  first,
+  second,
+});
+const column = (ratio: number, first: Layout, second: Layout): Layout => ({
+  axis: "column",
+  ratio,
+  first,
+  second,
+});
+export const TEMPLATES: Record<TemplateName, Template> = {
+  chat: {
+    label: "chat only",
+    slots: [{ kind: "agent", profile: "codex" }],
+    focus: 0,
+    layout: (id) => at(id(0)),
+  },
+  code: {
+    label: "files, editor, chat",
+    slots: [
+      { kind: "nvim", profile: "nvim" },
+      { kind: "agent", profile: "codex" },
+      { kind: "yazi", profile: "yazi" },
+    ],
+    focus: 0,
+    layout: (id) => row(0.26, at(id(2)), row(0.65, at(id(0)), at(id(1)))),
+  },
+  "files-editor": {
+    label: "files, editor",
+    slots: [
+      { kind: "yazi", profile: "yazi" },
+      { kind: "nvim", profile: "nvim" },
+    ],
+    focus: 1,
+    layout: (id) => row(0.3, at(id(0)), at(id(1))),
+  },
+  review: {
+    label: "hunk, chat",
+    slots: [
+      { kind: "hunk", profile: "hunk" },
+      { kind: "agent", profile: "codex" },
+    ],
+    focus: 0,
+    layout: (id) => row(0.65, at(id(0)), at(id(1))),
+  },
+  "files-review": {
+    label: "files, hunk, chat",
+    slots: [
+      { kind: "yazi", profile: "yazi" },
+      { kind: "hunk", profile: "hunk" },
+      { kind: "agent", profile: "codex" },
+    ],
+    focus: 1,
+    layout: (id) => row(0.26, at(id(0)), row(0.65, at(id(1)), at(id(2)))),
+  },
+  "editor-chat": {
+    label: "editor, chat",
+    slots: [
+      { kind: "nvim", profile: "nvim" },
+      { kind: "agent", profile: "codex" },
+    ],
+    focus: 0,
+    layout: (id) => row(0.65, at(id(0)), at(id(1))),
+  },
+  editor: {
+    label: "editor only",
+    slots: [{ kind: "nvim", profile: "nvim" }],
+    focus: 0,
+    layout: (id) => at(id(0)),
+  },
+  run: {
+    label: "shell only",
+    slots: [{ kind: "shell", profile: "shell" }],
+    focus: 0,
+    layout: (id) => at(id(0)),
+  },
+  "editor-chat-stack": {
+    label: "editor above chat",
+    slots: [
+      { kind: "nvim", profile: "nvim" },
+      { kind: "agent", profile: "codex" },
+    ],
+    focus: 0,
+    layout: (id) => column(0.6, at(id(0)), at(id(1))),
+  },
+};
+const slotProfile = (slot: TemplateSlot, agent: string) =>
+  slot.kind === "agent" ? agent : slot.profile;
+/** Pane ids in layout order, which is also the visible pane order. */
+export function paneOrder(layout: Layout): string[] {
+  return "pane" in layout
+    ? [layout.pane]
+    : [...paneOrder(layout.first), ...paneOrder(layout.second)];
+}
+export function preset(name: TemplateName = "code", agent = "codex"): Tab {
+  const template = TEMPLATES[name];
+  const panes = template.slots.map((slot) =>
+    createPane(slot.kind, slotProfile(slot, agent)),
+  );
   return {
     id: uid(),
     name,
     panes,
-    focused: panes[0]!.id,
+    focused: panes[template.focus]!.id,
     zoom: false,
-    layout:
-      name === "code"
-        ? { axis: "row", ratio: 0.26, first: leaf(panes[2]!), second: main }
-        : main,
+    layout: template.layout((index) => panes[index]!.id),
+    template: name,
   };
+}
+/** Show the template's panes and arrange them. Never stops or restarts a pane. */
+export function applyTemplate(
+  tab: Tab,
+  name: TemplateName,
+  agent = "codex",
+): void {
+  const template = TEMPLATES[name];
+  const shown = new Set(paneOrder(tab.layout));
+  const used = new Set<string>();
+  const chosen = template.slots.map((slot) => {
+    const pool = tab.panes.filter(
+      (pane) => pane.kind === slot.kind && !used.has(pane.id),
+    );
+    const reuse =
+      pool.find((pane) => shown.has(pane.id)) ??
+      pool.find((pane) => pane.profile === slotProfile(slot, agent)) ??
+      pool[0];
+    if (reuse) {
+      used.add(reuse.id);
+      return reuse;
+    }
+    const pane = createPane(slot.kind, slotProfile(slot, agent));
+    tab.panes.push(pane);
+    return pane;
+  });
+  tab.layout = template.layout((index) => chosen[index]!.id);
+  tab.template = name;
+  tab.zoom = false;
+  if (!chosen.some((pane) => pane.id === tab.focused))
+    tab.focused = chosen[template.focus]!.id;
 }
 export function createWorkspace(
   path: string,
-  name: "code" | "review" | "run" = "code",
+  name: TemplateName = "code",
 ): Workspace {
   const tabs = [preset(name)];
   return { id: uid(), path, tabs, activeTab: tabs[0]!.id };

@@ -103,3 +103,35 @@ export const ReviewMenu = {
 export const ResizeDrag = {
   render: () => terminalPreview("resize-drag"),
 } satisfies StoryObj;
+
+export const TemplateChat = {
+  render: () => terminalPreview("tpl-chat"),
+} satisfies StoryObj;
+
+export const TemplateFilesEditor = {
+  render: () => terminalPreview("tpl-files-editor"),
+} satisfies StoryObj;
+
+export const TemplateReview = {
+  render: () => terminalPreview("tpl-review"),
+} satisfies StoryObj;
+
+export const TemplateFilesReview = {
+  render: () => terminalPreview("tpl-files-review"),
+} satisfies StoryObj;
+
+export const TemplateEditorChat = {
+  render: () => terminalPreview("tpl-editor-chat"),
+} satisfies StoryObj;
+
+export const TemplateEditor = {
+  render: () => terminalPreview("tpl-editor"),
+} satisfies StoryObj;
+
+export const TemplateRun = {
+  render: () => terminalPreview("tpl-run"),
+} satisfies StoryObj;
+
+export const TemplateEditorChatStack = {
+  render: () => terminalPreview("tpl-editor-chat-stack"),
+} satisfies StoryObj;

@@ -1,12 +1,13 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
+import { TEMPLATE_ORDER, type TemplateName } from "./model.ts";
 
 export type Profile = { argv: string[]; env?: Record<string, string> };
 export type Task = Profile & { shell?: boolean };
 export type Config = {
   prefix: string;
-  preset: "code" | "review" | "run";
+  preset: TemplateName;
   background: string;
   foreground: string;
   accent: string;
@@ -54,9 +55,9 @@ export function validatePatch(value: unknown): Partial<Config> {
         throw new Error("prefix must be ctrl+<letter>");
       patch.prefix = v;
     } else if (key === "preset") {
-      if (!["code", "review", "run"].includes(String(v)))
-        throw new Error("preset must be code, review or run");
-      patch.preset = v as Config["preset"];
+      if (!TEMPLATE_ORDER.includes(v as TemplateName))
+        throw new Error(`preset must be one of ${TEMPLATE_ORDER.join(", ")}`);
+      patch.preset = v as TemplateName;
     } else if (["background", "foreground", "accent"].includes(key)) {
       if (typeof v !== "string" || !/^#[0-9a-f]{6}$/i.test(v))
         throw new Error(`${key} must be #RRGGBB`);

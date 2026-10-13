@@ -4,7 +4,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { App, type PaneHost, type PaneEditor } from "../src/app.ts";
 import { defaults } from "../src/config.ts";
 import { MENU_LABELS, menuSlots } from "../src/menu.ts";
-import { splitHandles } from "../src/model.ts";
+import { splitHandles, applyTemplate, type TemplateName } from "../src/model.ts";
 import { catalog } from "../storybook/catalog.ts";
 import type { Phase } from "../src/pty.ts";
 
@@ -51,6 +51,22 @@ const fixtureEditor: PaneEditor = {
   async dispose() {},
   abortInitialization() {},
 };
+const agentOutput =
+  "\x1b[2J\x1b[H\x1b[38;2;140;210;170mAgent session\x1b[0m\r\n\r\n> Explain welcome.ts\r\n\r\nReview and submit in\r\nthe native CLI.";
+const yaziOutput =
+  "\x1b[2J\x1b[H\x1b[38;2;140;210;170mproject/\x1b[0m\r\n\r\n\x1b[1;38;2;183;167;232m> src/\x1b[0m\r\n  stories/\r\n  README.md\r\n  package.json\r\n  welcome.ts\r\n\r\nYazi native pane\r\nUser theme and keys";
+const hunkOutput =
+  "\x1b[2J\x1b[H\x1b[1mworking tree\x1b[0m\r\n\r\n\x1b[38;2;140;210;170m+welcome.ts\x1b[0m\r\n@@ -1,3 +1,4 @@\r\n const greeting = 'Hello';";
+const shellOutput =
+  "\x1b[2J\x1b[H$ bun run check\r\n 43 pass\r\n";
+const fixtureOutput = (kind: string) =>
+  ({
+    nvim: editorOutput,
+    agent: agentOutput,
+    yazi: yaziOutput,
+    hunk: hunkOutput,
+    shell: shellOutput,
+  })[kind] ?? editorOutput;
 const frames: Record<string, unknown> = {};
 const toHex = (color: { toInts(): number[] }) =>
   "#" +
@@ -92,49 +108,54 @@ for (const spec of catalog) {
   const key = (name: string) => setup.mockInput.pressKey(name);
   const navigate = () => setup.mockInput.pressKey("g", { ctrl: true });
   try {
-    if (spec.state !== "restore" && spec.state !== "empty")
-      app.attachTerminal(
-        app.tab().panes[0]!,
-        new FixtureHost("running", editorOutput),
-        fixtureEditor,
-      );
-    if (
-      [
-        "codex",
-        "claude",
-        "opencode",
-        "exited",
-        "stopping",
-        "agent-error",
-        "context",
-      ].includes(spec.state)
-    ) {
-      const pane = app.tab().panes[1]!;
-      pane.profile = ["codex", "claude", "opencode"].includes(spec.state)
-        ? spec.state
-        : "codex";
-      const phase =
-        spec.state === "agent-error"
-          ? "error"
-          : ["exited", "stopping"].includes(spec.state)
-            ? (spec.state as Phase)
-            : "running";
-      app.attachTerminal(
-        pane,
-        new FixtureHost(
-          phase,
-          "\x1b[2J\x1b[H\x1b[38;2;140;210;170mAgent session\x1b[0m\r\n\r\n> Explain welcome.ts\r\n\r\nReview and submit in\r\nthe native CLI.",
-        ),
-      );
-    }
-    if (!["files", "restore", "empty"].includes(spec.state)) {
-      app.attachTerminal(
-        app.tab().panes[2]!,
-        new FixtureHost(
-          "running",
-          "\x1b[2J\x1b[H\x1b[38;2;140;210;170mproject/\x1b[0m\r\n\r\n\x1b[1;38;2;183;167;232m> src/\x1b[0m\r\n  stories/\r\n  README.md\r\n  package.json\r\n  welcome.ts\r\n\r\nYazi native pane\r\nUser theme and keys",
-        ),
-      );
+    const template = spec.state.startsWith("tpl-")
+      ? (spec.state.slice(4) as TemplateName)
+      : undefined;
+    if (template) applyTemplate(app.tab(), template);
+    if (template) {
+      // Template stories attach by kind so every slot shows its own pane.
+      for (const pane of app.tab().panes)
+        app.attachTerminal(
+          pane,
+          new FixtureHost("running", fixtureOutput(pane.kind)),
+          pane.kind === "nvim" ? fixtureEditor : undefined,
+        );
+    } else {
+      if (spec.state !== "restore" && spec.state !== "empty")
+        app.attachTerminal(
+          app.tab().panes[0]!,
+          new FixtureHost("running", editorOutput),
+          fixtureEditor,
+        );
+      if (
+        [
+          "codex",
+          "claude",
+          "opencode",
+          "exited",
+          "stopping",
+          "agent-error",
+          "context",
+        ].includes(spec.state)
+      ) {
+        const pane = app.tab().panes[1]!;
+        pane.profile = ["codex", "claude", "opencode"].includes(spec.state)
+          ? spec.state
+          : "codex";
+        const phase =
+          spec.state === "agent-error"
+            ? "error"
+            : ["exited", "stopping"].includes(spec.state)
+              ? (spec.state as Phase)
+              : "running";
+        app.attachTerminal(pane, new FixtureHost(phase, agentOutput));
+      }
+      if (!["files", "restore", "empty"].includes(spec.state)) {
+        app.attachTerminal(
+          app.tab().panes[2]!,
+          new FixtureHost("running", yaziOutput),
+        );
+      }
     }
     if (spec.state === "native-files") {
       navigate();
