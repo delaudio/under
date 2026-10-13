@@ -112,6 +112,38 @@ template does not include keep running hidden. If a template needs a pane kind
 the tab does not have, a stopped placeholder appears and starting stays an
 explicit action.
 
+Custom templates are declared in the user config or in a project's `.under.json`
+and merged over the built-ins:
+
+```json
+{
+  "templates": {
+    "compose": {
+      "label": "files, editor, claude",
+      "panes": [
+        { "kind": "yazi" },
+        { "kind": "nvim" },
+        { "kind": "agent", "profile": "claude" }
+      ],
+      "layout": {
+        "axis": "row",
+        "ratio": 0.3,
+        "first": 0,
+        "second": { "axis": "row", "ratio": 0.6, "first": 1, "second": 2 }
+      },
+      "focus": 1,
+      "key": "c"
+    }
+  }
+}
+```
+
+`panes` is the tab order, `layout` is the split tree with pane indexes as
+leaves, `focus` is the pane that receives focus, and `key` is an optional extra
+shortcut. A custom template may override a built-in of the same name, and
+`preset` accepts a custom name as the workspace's initial layout. Invalid
+definitions are reported as a warning naming the offending field.
+
 Start stopped tools explicitly through the menus or palette; Enter also starts
 a focused stopped pane. Selecting a provider reuses the idle chat pane. New tabs do not execute
 commands. Tabs and hidden panes preserve running processes and terminal state.

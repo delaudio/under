@@ -4,7 +4,11 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { App, type PaneHost, type PaneEditor } from "../src/app.ts";
 import { defaults } from "../src/config.ts";
 import { MENU_LABELS, menuSlots } from "../src/menu.ts";
-import { splitHandles, applyTemplate, type TemplateName } from "../src/model.ts";
+import {
+  splitHandles,
+  type Template,
+  type TemplateName,
+} from "../src/model.ts";
 import { catalog } from "../storybook/catalog.ts";
 import type { Phase } from "../src/pty.ts";
 
@@ -67,6 +71,23 @@ const fixtureOutput = (kind: string) =>
     hunk: hunkOutput,
     shell: shellOutput,
   })[kind] ?? editorOutput;
+/** A template a user could declare in .under.json, shown by the compose story. */
+const userTemplate: Template = {
+  label: "files, editor, claude",
+  slots: [
+    { kind: "yazi" },
+    { kind: "nvim" },
+    { kind: "agent", profile: "claude" },
+  ],
+  focus: 1,
+  shape: {
+    axis: "row",
+    ratio: 0.3,
+    first: 0,
+    second: { axis: "row", ratio: 0.6, first: 1, second: 2 },
+  },
+  key: "c",
+};
 const frames: Record<string, unknown> = {};
 const toHex = (color: { toInts(): number[] }) =>
   "#" +
@@ -81,7 +102,16 @@ for (const spec of catalog) {
     height: spec.height,
   });
   const app = new App(setup.renderer, "/fixtures/project", undefined, {
-    config: defaults,
+    config:
+      spec.state === "tpl-compose"
+        ? {
+            ...defaults,
+            // Start from a tab without an agent pane so the template's own
+            // profile is created rather than an existing pane being reused.
+            preset: "editor",
+            templates: { compose: userTemplate },
+          }
+        : defaults,
     available: () => spec.state !== "disabled",
     files:
       spec.state === "empty"
@@ -111,7 +141,7 @@ for (const spec of catalog) {
     const template = spec.state.startsWith("tpl-")
       ? (spec.state.slice(4) as TemplateName)
       : undefined;
-    if (template) applyTemplate(app.tab(), template);
+    if (template) app.applyLayout(template);
     if (template) {
       // Template stories attach by kind so every slot shows its own pane.
       for (const pane of app.tab().panes)
