@@ -21,7 +21,7 @@ use `--clean` or disable automatic initial editor launch. Directory containment,
 wrapped-menu mouse positions and unavailable agent actions have native tests.
 
 On 2026-10-12, local macOS arm64 verification with Bun 1.4.3 and Neovim
-0.12.5 passed strict checking, all 57 native tests with no skips, Storybook
+0.12.5 passed strict checking, all 58 native tests with no skips, Storybook
 checking/build, and all 42 browser checks (41 screenshot comparisons and one
 catalog/inventory check). Baselines were inspected before comparison. A separate
 local probe confirmed startup and input with the owner's ordinary Neovim
@@ -65,6 +65,7 @@ Coverage includes:
 - dragging a split boundary with the mouse resizes it, clamps at the minimum and maximum, keeps focus and sends no terminal input;
 - every layout template, applied with its shortcut, hides and re-shows panes without stopping them, recreating them or quitting the editor;
 - user-declared templates are validated field by field, merged over the built-ins, listed in the menu and reachable by their configured key;
+- entering navigation mode is visible in the footer and the shortcut help opens from both `h` and `?`;
 - RPC teardown races reject in-flight requests without an unhandled rejection;
 - quit confirms editor exit from the editor socket and the process table, not only the PTY exit event;
 - the lockfile resolves packages from the public registry only, so a mirror or private registry cannot be published with it;

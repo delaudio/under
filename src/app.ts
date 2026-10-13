@@ -864,7 +864,7 @@ export class App {
     this.openModal({
       kind: "help",
       title: "Under shortcuts",
-      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  Tab/j/k: cycle panes\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize  1-9: layouts\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
+      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\nTab/j/k: cycle panes  1-9: layouts\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
       index: 0,
       cancelMode: "app",
     });
@@ -1186,7 +1186,7 @@ export class App {
       else if (/^[1-9]$/.test(key.name) || this.layoutKeys.has(key.name))
         this.applyLayout(this.layoutKeys.get(key.name));
       else if (key.name === "q") this.run(() => this.shutdown(), true);
-      else if (key.name === "?") this.help();
+      else if (key.name === "?" || key.name === "h") this.help();
     }
     this.draw();
   };
@@ -1332,7 +1332,25 @@ export class App {
       "\n\n Enter open · r reload";
     this.footer.top = Math.max(0, height - 1);
     this.footer.width = width;
-    this.footer.content = `${this.filesFocused && this.input.mode === "app" ? "FILES" : this.input.mode.toUpperCase()} | ${width < 80 ? "Ctrl-G f: files · Tab: panes | " : ""}${this.message.replace(/[\x00-\x1f\x7f]/g, " ")}`;
+    // Entering navigation mode must be obvious: it is the only signal that the
+    // next keystroke belongs to Under rather than to the focused tool.
+    const navigating = this.input.mode === "app";
+    const label =
+      this.filesFocused && navigating
+        ? "FILES"
+        : navigating
+          ? "NAV"
+          : this.input.mode === "modal"
+            ? "MODAL"
+            : "TERMINAL";
+    const hint = navigating
+      ? width < 80
+        ? "Esc: back · m: menu · h: help | "
+        : "Esc: back · m: menu · h: help · 1-9: layouts · Tab: panes | "
+      : width < 80
+        ? "Ctrl-G f: files · Tab: panes | "
+        : "";
+    this.footer.content = `${label} | ${hint}${this.message.replace(/[\x00-\x1f\x7f]/g, " ")}`;
     const rect = {
       x: side,
       y: top,

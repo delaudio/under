@@ -81,11 +81,13 @@ The palette can be filtered by typing. Escape closes it.
 | drag a pane border  | Resize that split with the mouse                        |
 | 1–9                 | Apply a layout template (see Layouts)                   |
 | b                   | Toggle workspace sidebar                                 |
-| ?                   | Shortcut help                                            |
+| ? / h               | Shortcut help                                            |
 | q                   | Save layout and quit after checking unsaved buffers      |
 
 Ordinary keys, paste and mouse input belong to the focused tool. Application
 commands require navigation mode. A modal owns input until it is dismissed.
+Entering navigation mode is shown in the footer as `NAV`, together with the keys
+that become available, so it is clear where the next keystroke will go.
 
 ### Layouts
 
@@ -140,7 +142,8 @@ and merged over the built-ins:
 
 `panes` is the tab order, `layout` is the split tree with pane indexes as
 leaves, `focus` is the pane that receives focus, and `key` is an optional extra
-shortcut. A custom template may override a built-in of the same name, and
+shortcut from the keys navigation does not own (`h` is reserved for the shortcut
+help). A custom template may override a built-in of the same name, and
 `preset` accepts a custom name as the workspace's initial layout. Invalid
 definitions are reported as a warning naming the offending field.
 
