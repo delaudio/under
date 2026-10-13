@@ -210,6 +210,7 @@ for (const spec of catalog) {
       setup.mockInput.pressEnter();
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
+    if (spec.state === "navigation") navigate();
     if (spec.state === "files") {
       navigate();
       key("f");

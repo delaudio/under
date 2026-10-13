@@ -20,6 +20,13 @@ export const catalog = [
   { id: "tiny", export: "Tiny", width: 24, height: 10, state: "editor" },
   { id: "files", export: "Files", width: 120, height: 30, state: "files" },
   {
+    id: "navigation",
+    export: "Navigation",
+    width: 120,
+    height: 30,
+    state: "navigation",
+  },
+  {
     id: "files-narrow",
     export: "FilesNarrow",
     width: 50,

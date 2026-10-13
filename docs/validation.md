@@ -9,8 +9,8 @@ version checks. [CI evidence](https://github.com/delaudio/under/actions/runs/382
 
 The suite includes full-app SIGTERM cleanup, cancellation during a real Neovim
 startup prompt and end-to-end child-to-editor opening of a filename with spaces,
-quotes and Unicode at a specified line. Three cell-frame layout fixtures are
-stored under `docs/previews`; regenerate them with `bun run visual`.
+quotes and Unicode at a specified line. Cell-frame previews live in the Storybook
+catalog; see [coverage and limitations](../storybook/COVERAGE.md).
 
 ## Current working-tree validation
 
@@ -22,7 +22,7 @@ wrapped-menu mouse positions and unavailable agent actions have native tests.
 
 On 2026-10-12, local macOS arm64 verification with Bun 1.4.3 and Neovim
 0.12.5 passed strict checking, all 58 native tests with no skips, Storybook
-checking/build, and all 42 browser checks (41 screenshot comparisons and one
+checking/build, and all 43 browser checks (42 screenshot comparisons and one
 catalog/inventory check). Baselines were inspected before comparison. A separate
 local probe confirmed startup and input with the owner's ordinary Neovim
 configuration without saving file changes. The in-band resize-report adapter has
@@ -31,7 +31,7 @@ after a pane resize (expected 55×26, observed 70×34). This is local evidence; 
 new CI workflow has not yet run for these uncommitted changes.
 
 The browser visual gate renders the production App and terminal panes into
-41 native frames and compares Chromium element screenshots. See
+42 native frames and compares Chromium element screenshots. See
 [coverage and limitations](../storybook/COVERAGE.md). The visual CI job uses
 macOS baselines; the native CI job retains Linux and macOS tool checks.
 

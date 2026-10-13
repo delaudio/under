@@ -20,6 +20,9 @@ export const Tiny = {
 export const Files = {
   render: () => terminalPreview("files"),
 } satisfies StoryObj;
+export const Navigation = {
+  render: () => terminalPreview("navigation"),
+} satisfies StoryObj;
 export const FilesNarrow = {
   render: () => terminalPreview("files-narrow"),
 } satisfies StoryObj;
