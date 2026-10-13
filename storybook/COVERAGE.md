@@ -1,12 +1,12 @@
 # TUI visual coverage
 
-41 stories capture the production OpenTUI App through its native test renderer.
+42 stories capture the production OpenTUI App through its native test renderer.
 The browser preview preserves text, foreground/background, bold, italic,
 underline and cell widths; it uses bundled JetBrains Mono at 15px, 9×20px cells.
 
 | Group | Coverage |
 | --- | --- |
-| Workspace | 120×30, 80×24, 50×15, 24×10; hidden files; empty directory; stopped-process restore; a resize captured mid-drag |
+| Workspace | 120×30, 80×24, 50×15, 24×10; hidden files; empty directory; stopped-process restore; a resize captured mid-drag; navigation mode with its footer hint |
 | Layouts | every layout template (chat, code, files-editor, review, files-review, editor-chat, editor, run, editor-chat-stack) plus a user-declared template |
 | Files | Native Yazi pane with synthetic folder output; fallback selection at wide and narrow widths; real directory/opening behavior is checked by native tests |
 | Menu | File, View, Review, Tools, Agent, Help; wrapped and scrolled menus; unavailable providers; checked toggles |
