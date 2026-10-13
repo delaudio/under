@@ -3,9 +3,9 @@ import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import { loadState } from "./state.ts";
 import { statePath } from "./config.ts";
-import { openRemote } from "./bridge.ts";
+import { openRemote, reviewRemote } from "./bridge.ts";
 
-export const HELP = `Under — a flexible terminal IDE\n\nUsage: under [directory] [--restore] [--no-editor]\n       under open <file> [--line N] [--column N]\n       under --help | --version\n\nCtrl-G enters application navigation; m opens the top menu, p the palette.\nFiles are on the left, Neovim in the centre and agent chat on the right.\nClick Agent to choose a provider; Ctrl-G f focuses files.\nTools and repository tasks start only through explicit actions.\n--restore restores layout metadata with all processes initially stopped.\nunder open uses UNDER_OPEN_SOCKET inside Yazi, Hunk or task panes.\n`;
+export const HELP = `Under — a flexible terminal IDE\n\nUsage: under [directory] [--restore] [--no-editor]\n       under open <file> [--line N] [--column N]\n       under review-here [--staged] [--ref <rev>] [--to <rev>]\n       under --help | --version\n\nCtrl-G enters application navigation; m opens the top menu, p the palette.\nFiles are on the left, Neovim in the centre and agent chat on the right.\nClick Agent to choose a provider; Ctrl-G f focuses files.\nCtrl-G h shows the shortcuts; Ctrl-G then 1-9 applies a layout template.\nTools and repository tasks start only through explicit actions.\n--restore restores layout metadata with all processes initially stopped.\nunder open uses UNDER_OPEN_SOCKET inside Yazi, Hunk or task panes.\nunder review-here asks Under to review the current directory in Hunk.\n`;
 export async function main(args = process.argv.slice(2)) {
   if (!Bun.semver.satisfies(Bun.version, ">=1.4.3"))
     throw new Error(
@@ -42,6 +42,27 @@ export async function main(args = process.argv.slice(2)) {
       number("--line", editorLine, 1),
       number("--column", 0, 0),
     );
+    return;
+  }
+  if (args[0] === "review-here") {
+    const socket = process.env.UNDER_OPEN_SOCKET;
+    if (!socket)
+      throw new Error("No Under bridge; run this from a tool pane");
+    const value = (flag: string) => {
+      const index = args.indexOf(flag);
+      if (index < 0) return undefined;
+      const next = args[index + 1];
+      if (!next || next.startsWith("-")) throw new Error(`Invalid ${flag}`);
+      return next;
+    };
+    const ref = value("--ref");
+    const to = value("--to");
+    await reviewRemote(socket, {
+      dir: process.cwd(),
+      ...(args.includes("--staged") ? { staged: true } : {}),
+      ...(ref ? { ref } : {}),
+      ...(to ? { to } : {}),
+    });
     return;
   }
   for (const arg of args)

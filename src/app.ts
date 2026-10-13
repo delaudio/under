@@ -37,6 +37,7 @@ import {
   setSplitRatio,
   applyTemplate,
   paneOrder,
+  withArgs,
   leaf,
   catalogue,
   BUILTIN_CATALOGUE,
@@ -354,8 +355,15 @@ export class App {
     if (!this.runtimes.has(pane.id)) await this.start(pane);
     this.focusFiles();
   }
-  async openReview(staged: boolean) {
-    const profile = staged ? "hunk-staged" : "hunk";
+  async openReview(
+    options: {
+      staged?: boolean;
+      from?: string;
+      to?: string;
+      cwd?: string;
+    } = {},
+  ) {
+    const profile = options.staged ? "hunk-staged" : "hunk";
     const command = this.config.profiles[profile];
     if (
       !command ||
@@ -366,27 +374,43 @@ export class App {
     )
       throw new Error("Install Hunk or configure its profile to view diffs");
     const workspace = this.workspace();
+    // A review may target another directory, such as a worktree that lives
+    // outside the workspace root.
+    const cwd = options.cwd ?? workspace.path;
     const git = Bun.spawn({
       cmd: ["git", "rev-parse", "--is-inside-work-tree"],
-      cwd: workspace.path,
+      cwd,
       stdout: "pipe",
       stderr: "pipe",
     });
     const inside = await new Response(git.stdout).text();
     if ((await git.exited) !== 0 || inside.trim() !== "true")
-      throw new Error("Diff review requires a Git working tree");
-    let tab = workspace.tabs.find((t) =>
-      t.panes.some((p) => p.kind === "hunk" && p.profile === profile),
-    );
+      throw new Error(`Diff review requires a Git working tree: ${cwd}`);
+    const args = [
+      ...(options.from ? [options.from] : []),
+      ...(options.to ? [options.to] : []),
+    ];
+    const key = args.join("\u0000");
+    const matches = (pane: Pane) =>
+      pane.kind === "hunk" &&
+      pane.profile === profile &&
+      (pane.cwd ?? workspace.path) === cwd &&
+      (pane.args?.join("\u0000") ?? "") === key;
+    let tab = workspace.tabs.find((t) => t.panes.some(matches));
     if (!tab) {
       tab = preset("review", "codex", this.catalogue);
-      tab.name = staged ? "staged diff" : "working diff";
-      tab.panes[0]!.profile = profile;
+      tab.name = options.staged
+        ? "staged diff"
+        : options.from
+          ? `diff ${options.from}${options.to ? `..${options.to}` : ""}`
+          : "working diff";
+      const pane = tab.panes[0]!;
+      pane.profile = profile;
+      pane.cwd = cwd;
+      if (args.length) pane.args = args;
       workspace.tabs.push(tab);
     }
-    const pane = tab.panes.find(
-      (p) => p.kind === "hunk" && p.profile === profile,
-    )!;
+    const pane = tab.panes.find(matches)!;
     workspace.activeTab = tab.id;
     tab.focused = pane.id;
     this.filesFocused = false;
@@ -430,19 +454,37 @@ export class App {
     let b = this.bridges.get(w.id);
     if (b) return b;
     b = new FileBridge();
-    await b.start(async (path, line, column) => {
-      if (this.shuttingDown) throw new Error("Under is shutting down");
-      const e = this.editor(w);
-      await e.runtime.editor!.openFile(path, line, column);
-      this.state.active = w.id;
-      w.activeTab = w.tabs.find((t) =>
-        t.panes.some((p) => p.id === e.pane.id),
-      )!.id;
-      this.tab().focused = e.pane.id;
-      this.filesFocused = false;
-      if (!this.modal) this.input.mode = "terminal";
-      this.message = `Opened ${displayName(basename(path))}`;
-      this.draw();
+    await b.start({
+      open: async (path, line, column) => {
+        if (this.shuttingDown) throw new Error("Under is shutting down");
+        const e = this.editor(w);
+        await e.runtime.editor!.openFile(path, line, column);
+        this.state.active = w.id;
+        w.activeTab = w.tabs.find((t) =>
+          t.panes.some((p) => p.id === e.pane.id),
+        )!.id;
+        this.tab().focused = e.pane.id;
+        this.filesFocused = false;
+        if (!this.modal) this.input.mode = "terminal";
+        this.message = `Opened ${displayName(basename(path))}`;
+        this.draw();
+      },
+      review: async (target) => {
+        if (this.shuttingDown) throw new Error("Under is shutting down");
+        this.state.active = w.id;
+        try {
+          await this.openReview({
+            staged: target.staged,
+            from: target.ref,
+            to: target.to,
+            cwd: target.dir,
+          });
+        } catch (e) {
+          // The tool that asked cannot show the reply, so report it in Under.
+          this.report(String(e));
+          throw e;
+        }
+      },
     });
     this.bridges.set(w.id, b);
     return b;
@@ -450,9 +492,20 @@ export class App {
   private async helpers() {
     if (this.helperDir) return;
     this.helperDir = await mkdtemp(join(tmpdir(), "under-helper-"));
-    const script = `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' '${fileURLToPath(new URL("./main.ts", import.meta.url)).replaceAll("'", "'\\''")}' open "$@"\n`;
-    await writeFile(join(this.helperDir, "nvim"), script);
+    const bun = process.execPath.replaceAll("'", "'\\''");
+    const main = fileURLToPath(new URL("./main.ts", import.meta.url)).replaceAll("'", "'\\''");
+    // `nvim` is the $EDITOR bridge; `under` lets a tool ask Under to act, such as
+    // opening a review of the directory the tool is currently showing.
+    await writeFile(
+      join(this.helperDir, "nvim"),
+      `#!/bin/sh\nexec '${bun}' '${main}' open "$@"\n`,
+    );
+    await writeFile(
+      join(this.helperDir, "under"),
+      `#!/bin/sh\nexec '${bun}' '${main}' "$@"\n`,
+    );
     await chmod(join(this.helperDir, "nvim"), 0o700);
+    await chmod(join(this.helperDir, "under"), 0o700);
   }
   start(pane: Pane): Promise<void> {
     if (this.starts.has(pane.id))
@@ -483,13 +536,17 @@ export class App {
       throw new Error(
         `Missing executable ${profile.argv[0]}; install it or configure its argv`,
       );
-    if (!(await stat(w.path)).isDirectory())
-      throw new Error(`Not a directory: ${w.path}`);
+    // A pane may be scoped to its own directory, for example a Hunk review of a
+    // worktree that lives outside the workspace root.
+    const cwd = pane.cwd ?? w.path;
+    if (!(await stat(cwd)).isDirectory())
+      throw new Error(`Not a directory: ${cwd}`);
     await this.helpers();
     const bridge = await this.bridge(w);
     if (this.shuttingDown) throw new Error("Launch cancelled during shutdown");
     let command: Profile = {
       ...profile,
+      argv: withArgs(profile.argv, pane.args),
       env: {
         ...profile.env,
         UNDER_OPEN_SOCKET: bridge.path,
@@ -498,11 +555,12 @@ export class App {
       },
     };
     if (pane.kind === "yazi") {
-      const directory = await yaziConfig(
-        join(this.helperDir, "nvim"),
-        profile.env,
-        yaziVersion(profile.argv[0]!),
-      );
+      const directory = await yaziConfig({
+        editor: join(this.helperDir, "nvim"),
+        tool: join(this.helperDir, "under"),
+        env: profile.env,
+        version: yaziVersion(profile.argv[0]!),
+      });
       this.yaziDirectories.add(directory);
       command.env = { ...command.env, YAZI_CONFIG_HOME: directory };
     }
@@ -514,9 +572,9 @@ export class App {
     let host: PtyHost;
     let editor: Editor | undefined;
     if (pane.kind === "nvim") {
-      editor = await Editor.launch(command, w.path);
+      editor = await Editor.launch(command, cwd);
       host = editor.host;
-    } else host = new PtyHost(command, w.path);
+    } else host = new PtyHost(command, cwd);
     if (this.shuttingDown) {
       editor ? await editor.dispose() : await host.close();
       throw new Error("Launch cancelled during shutdown");
@@ -666,8 +724,11 @@ export class App {
       ),
       cmd("Add Neovim", () => this.add("nvim")),
       cmd("Add Yazi", () => this.openYazi()),
-      cmd("Working tree diff", () => this.openReview(false)),
-      cmd("Staged diff", () => this.openReview(true)),
+      cmd("Working tree diff", () => this.openReview()),
+      cmd("Staged diff", () => this.openReview({ staged: true })),
+      cmd("Review this directory", () => this.reviewHere(false)),
+      cmd("Review staged here", () => this.reviewHere(true)),
+      cmd("Review against revision…", () => this.askReview()),
       cmd("Redraw terminals", () => repaint(this.renderer)),
       cmd("Add Hunk live review", () => this.add("hunk")),
       cmd("Add Hunk staged review", () => this.add("hunk", "hunk-staged")),
@@ -839,15 +900,77 @@ export class App {
     }
     return commands;
   }
-  private ask(title: string, submit: Modal["submit"]) {
+  private ask(title: string, submit: Modal["submit"], initial = "") {
     this.openModal({
       kind: "input",
       title,
-      text: "",
+      text: initial,
       index: 0,
       submit,
       cancelMode: "app",
     });
+  }
+  /** Directory the focused file panel is showing, when Under knows it. */
+  private knownReviewDirectory(): string | undefined {
+    const native = this.tab().panes.find(
+      (pane) =>
+        pane.kind === "yazi" &&
+        this.runtimes.get(pane.id)?.host.phase === "running",
+    );
+    // Native Yazi owns its own navigation; its review binding reports the
+    // directory instead of Under guessing it.
+    if (native) return undefined;
+    return this.browsers.get(this.workspace().id)?.directory;
+  }
+  private async reviewHere(staged: boolean) {
+    const directory = this.knownReviewDirectory();
+    if (directory) return this.openReview({ staged, cwd: directory });
+    const root = this.workspace().path;
+    this.ask(
+      "Directory to review in Hunk",
+      (text) =>
+        this.openReview({ staged, cwd: resolve(root, text.trim() || ".") }),
+      root,
+    );
+  }
+  private parseRevisionTarget(text: string): { from?: string; to?: string } {
+    const tokens = text.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length >= 2) return { from: tokens[0], to: tokens[1] };
+    const range = /^(.+)\.\.(.+)$/.exec(tokens[0] ?? "");
+    if (range) return { from: range[1], to: range[2] };
+    return tokens[0] ? { from: tokens[0] } : {};
+  }
+  private suggestedRevision() {
+    try {
+      const probe = Bun.spawnSync({
+        cmd: ["git", "rev-parse", "--abbrev-ref", "@{upstream}"],
+        cwd: this.workspace().path,
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      const value = probe.stdout.toString().trim();
+      if (probe.exitCode === 0 && value && value !== "HEAD") return value;
+    } catch {
+      /* fall through to the default */
+    }
+    return "main";
+  }
+  private askReview() {
+    const directory = this.knownReviewDirectory();
+    const root = this.workspace().path;
+    if (directory) return this.askRevision(directory);
+    this.ask(
+      "Directory to review in Hunk",
+      (text) => this.askRevision(resolve(root, text.trim() || ".")),
+      root,
+    );
+  }
+  private askRevision(cwd: string) {
+    this.ask(
+      "Revision to diff against, or two revisions",
+      (text) => this.openReview({ ...this.parseRevisionTarget(text), cwd }),
+      this.suggestedRevision(),
+    );
   }
   private async checkEditors(panes: Pane[]) {
     for (const pane of panes) {
@@ -958,7 +1081,7 @@ export class App {
           c.name,
         );
       if (label === "Review")
-        return /^(Working tree diff|Staged diff)$/.test(c.name);
+        return /^(Working tree diff|Staged diff|Review )/.test(c.name);
       if (label === "Tools")
         return /^(Start focused|Stop |Restart |Add |Split |Run task|Reload|Redraw)/.test(
           c.name,
@@ -1162,8 +1285,8 @@ export class App {
         t.focused = order[(index + step + order.length) % order.length]!;
       } else if (key.name === "m") this.openMenu("File");
       else if (key.name === "f") this.focusFiles();
-      else if (key.name === "r") this.run(() => this.openReview(false));
-      else if (key.name === "s") this.run(() => this.openReview(true));
+      else if (key.name === "r") this.run(() => this.reviewHere(false));
+      else if (key.name === "s") this.run(() => this.reviewHere(true));
       else if (key.name === "l") repaint(this.renderer);
       else if (["return", "enter"].includes(key.name)) {
         const pane = t.panes.find((p) => p.id === t.focused)!;
@@ -1451,7 +1574,8 @@ export class App {
       r.frame.height = cell.height;
       r.frame.borderColor = id === t.focused ? this.config.accent : "#3a3a44";
       const pane = t.panes.find((p) => p.id === id)!;
-      r.title.content = `${pane.profile} [${r.host.phase}${r.host.exitCode !== null ? `:${r.host.exitCode}` : ""}]`;
+      const target = pane.args?.length ? ` ${pane.args.join(" ")}` : "";
+      r.title.content = `${pane.profile}${target} [${r.host.phase}${r.host.exitCode !== null ? `:${r.host.exitCode}` : ""}]`;
       if (
         id === t.focused &&
         this.input.mode === "terminal" &&

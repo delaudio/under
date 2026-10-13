@@ -222,4 +222,11 @@ export const catalog = [
     height: 30,
     state: "tpl-compose",
   },
+  {
+    id: "review-scoped",
+    export: "ReviewScoped",
+    width: 150,
+    height: 35,
+    state: "review-scoped",
+  },
 ] as const;

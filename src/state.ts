@@ -49,6 +49,19 @@ export function validateState(v: any): State {
           typeof p.profile !== "string"
         )
           throw new Error("Invalid pane");
+        if (
+          p.cwd !== undefined &&
+          (typeof p.cwd !== "string" || !p.cwd.startsWith("/"))
+        )
+          throw new Error("Invalid pane working directory");
+        if (
+          p.args !== undefined &&
+          (!Array.isArray(p.args) ||
+            p.args.some(
+              (a: unknown) => typeof a !== "string" || a.includes("\0"),
+            ))
+        )
+          throw new Error("Invalid pane arguments");
       }
       const leaves = new Set<string>();
       function tree(l: Layout, depth: number) {
@@ -109,6 +122,8 @@ export function validateState(v: any): State {
           id: p.id,
           kind: p.kind,
           profile: p.profile,
+          ...(typeof p.cwd === "string" ? { cwd: p.cwd } : {}),
+          ...(Array.isArray(p.args) ? { args: [...p.args] } : {}),
         })),
       })),
     })),

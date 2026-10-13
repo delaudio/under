@@ -8,7 +8,15 @@ export const PANE_KINDS: PaneKind[] = [
   "shell",
   "task",
 ];
-export type Pane = { id: string; kind: PaneKind; profile: string };
+export type Pane = {
+  id: string;
+  kind: PaneKind;
+  profile: string;
+  /** Absolute working directory for this pane; defaults to the workspace path. */
+  cwd?: string;
+  /** Extra arguments inserted into the profile command, before `--watch`. */
+  args?: string[];
+};
 export type Layout =
   | { pane: string }
   | { axis: "row" | "column"; ratio: number; first: Layout; second: Layout };
@@ -30,8 +38,18 @@ export type Workspace = {
 };
 export const uid = () => randomUUID();
 export const leaf = (pane: Pane): Layout => ({ pane: pane.id });
-export function createPane(kind: PaneKind, profile: string = kind): Pane {
-  return { id: uid(), kind, profile };
+export function createPane(
+  kind: PaneKind,
+  profile: string = kind,
+  extra: { cwd?: string; args?: string[] } = {},
+): Pane {
+  return {
+    id: uid(),
+    kind,
+    profile,
+    ...(extra.cwd ? { cwd: extra.cwd } : {}),
+    ...(extra.args?.length ? { args: extra.args } : {}),
+  };
 }
 export type TemplateName =
   | "chat"
@@ -202,6 +220,14 @@ export function paneOrder(layout: Layout): string[] {
   return "pane" in layout
     ? [layout.pane]
     : [...paneOrder(layout.first), ...paneOrder(layout.second)];
+}
+/** Insert extra pane arguments into a profile command, before a trailing --watch. */
+export function withArgs(argv: string[], args?: string[]): string[] {
+  if (!args?.length) return argv;
+  const at = argv.indexOf("--watch");
+  return at < 0
+    ? [...argv, ...args]
+    : [...argv.slice(0, at), ...args, ...argv.slice(at)];
 }
 export function preset(
   name: string = "code",

@@ -142,3 +142,7 @@ export const TemplateEditorChatStack = {
 export const TemplateCompose = {
   render: () => terminalPreview("tpl-compose"),
 } satisfies StoryObj;
+
+export const ReviewScoped = {
+  render: () => terminalPreview("review-scoped"),
+} satisfies StoryObj;
