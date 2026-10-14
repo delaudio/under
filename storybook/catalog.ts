@@ -257,4 +257,18 @@ export const catalog = [
     height: 30,
     state: "preview-destination",
   },
+  {
+    id: "worktrees",
+    export: "Worktrees",
+    width: 120,
+    height: 30,
+    state: "worktrees",
+  },
+  {
+    id: "worktrees-narrow",
+    export: "WorktreesNarrow",
+    width: 50,
+    height: 15,
+    state: "worktrees-narrow",
+  },
 ] as const;

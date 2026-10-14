@@ -153,6 +153,16 @@ the recent files that fill an empty query are remembered per workspace too.
 The overlay's row count is derived from the height it is about to have rather
 than read back from the renderable, whose computed size lags a layout pass.
 
+Worktree discovery lives in `src/git.ts`: `listWorktrees()` runs only
+`git worktree list --porcelain -z`, bounded in time and output, and parses the
+records with `parseWorktrees()`. `worktreeLabel()` names each entry by branch and
+its last two path segments, so sibling checkouts that share a basename stay
+distinguishable, and `worktreeBlocker()` explains why an entry cannot be opened.
+The list is re-read on every request, so worktrees created or removed outside
+Under appear immediately, and opening one creates a workspace without starting a
+tool. Nothing about a worktree is persisted: it is derived state, so a workspace
+pointing at a worktree restores like any other folder.
+
 Layout templates are a catalogue in `src/model.ts`: each names the panes it shows
 and the layout over them, in the order the tab already holds. `applyTemplate()`
 reuses a pane of the required kind, preferring one that is currently visible, and

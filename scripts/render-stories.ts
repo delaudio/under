@@ -3,6 +3,7 @@ import { TextAttributes } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { App, type PaneHost, type PaneEditor } from "../src/app.ts";
 import { defaults } from "../src/config.ts";
+import type { Worktree } from "../src/git.ts";
 import { MENU_LABELS, menuSlots } from "../src/menu.ts";
 import {
   preset,
@@ -89,6 +90,39 @@ const userTemplate: Template = {
   },
   key: "c",
 };
+/** A repository with a linked, a detached and a vanished worktree. */
+const worktreeFixtures: Worktree[] = [
+  {
+    path: "/fixtures/project",
+    branch: "main",
+    detached: false,
+    bare: false,
+    primary: true,
+    missing: false,
+  },
+  {
+    path: "/fixtures/worktree-feature",
+    branch: "feature/checkout",
+    detached: false,
+    bare: false,
+    primary: false,
+    missing: false,
+  },
+  {
+    path: "/fixtures/worktree-detached",
+    detached: true,
+    bare: false,
+    primary: false,
+    missing: false,
+  },
+  {
+    path: "/fixtures/worktree-gone",
+    detached: true,
+    bare: false,
+    primary: false,
+    missing: true,
+  },
+];
 const frames: Record<string, unknown> = {};
 const toHex = (color: { toInts(): number[] }) =>
   "#" +
@@ -113,6 +147,7 @@ for (const spec of catalog) {
             templates: { compose: userTemplate },
           }
         : defaults,
+    worktrees: spec.state.startsWith("worktrees") ? worktreeFixtures : undefined,
     quickFiles: spec.state.startsWith("quick")
       ? [
           "src/app.ts",
@@ -241,6 +276,13 @@ for (const spec of catalog) {
       navigate();
       key("g");
     }
+    if (spec.state.startsWith("worktrees")) {
+      navigate();
+      key("p");
+      await setup.mockInput.typeText("Open a worktree");
+      setup.mockInput.pressEnter();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     if (spec.state === "preview-destination") {
       // A second running agent in another tab makes the destination ambiguous.
       const tab = preset("editor-chat");
@@ -313,6 +355,8 @@ for (const spec of catalog) {
         "quick-narrow",
         "destinations",
         "preview-destination",
+        "worktrees",
+        "worktrees-narrow",
       ].includes(spec.state) &&
       !text.includes("under_")
     )
@@ -325,6 +369,8 @@ for (const spec of catalog) {
       throw new Error("Missing destinations");
     if (spec.state === "preview-destination" && !text.includes("Choose the agent"))
       throw new Error("Missing destination picker");
+    if (spec.state.startsWith("worktrees") && !text.includes("Worktrees of"))
+      throw new Error(`Missing worktree picker in ${spec.id}`);
     if (spec.state === "form" && !text.includes("File path"))
       throw new Error("Missing file form");
     if (menu && !text.includes(menu))
