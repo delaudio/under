@@ -14,7 +14,18 @@ import {
 } from "../src/git.ts";
 
 const git = (args: string[], cwd: string) => {
-  const result = Bun.spawnSync({ cmd: ["git", ...args], cwd });
+  // Never depend on the developer's or runner's global Git identity.
+  const result = Bun.spawnSync({
+    cmd: [
+      "git",
+      "-c",
+      "user.name=Under Test",
+      "-c",
+      "user.email=test@under.invalid",
+      ...args,
+    ],
+    cwd,
+  });
   if (result.exitCode !== 0)
     throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
 };
