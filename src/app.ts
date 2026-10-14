@@ -22,7 +22,7 @@ import { InputOwner } from "./input.ts";
 import { PtyHost } from "./pty.ts";
 import { Editor, type EditorSnapshot } from "./editor.ts";
 import { FileBridge } from "./bridge.ts";
-import { fileDiff } from "./git.ts";
+import { fileDiff, listWorktrees, worktreeBlocker, worktreeLabel, type Worktree } from "./git.ts";
 import { contextText, sameSnapshot, type ContextKind } from "./context.ts";
 import { loadConfig, statePath, type Config, type Profile } from "./config.ts";
 import { saveState, type State } from "./state.ts";
@@ -87,7 +87,8 @@ type Modal = {
     | "help"
     | "quick"
     | "destinations"
-    | "agents";
+    | "agents"
+    | "worktrees";
   menu?: MenuLabel;
   title: string;
   text: string;
@@ -144,6 +145,8 @@ export class App {
   };
   /** Last destination chosen per workspace, so a repeat needs no prompt. */
   private rememberedAgent = new Map<string, string>();
+  /** Worktrees listed for the current repository, refreshed on every request. */
+  private worktrees: Worktree[] = [];
   private chatHidden = false;
   private message = "Ctrl-G m: menu · f: files · p: commands";
   private shutdownPromise?: Promise<void>;
@@ -164,6 +167,8 @@ export class App {
       files?: FileEntry[];
       /** Deterministic Quick Open candidates for previews and tests. */
       quickFiles?: string[];
+      /** Deterministic worktree list for previews. */
+      worktrees?: Worktree[];
       available?: (command: string) => boolean;
     } = {},
   ) {
@@ -830,6 +835,7 @@ export class App {
           this.draw();
         }),
       ),
+      cmd("Open a worktree…", () => this.openWorktrees()),
       cmd("Move pane to new tab", () => {
         const t = this.tab();
         if (t.panes.length < 2) throw new Error("Split first");
@@ -1195,7 +1201,8 @@ export class App {
       kind === "menu" ||
       kind === "quick" ||
       kind === "destinations" ||
-      kind === "agents"
+      kind === "agents" ||
+      kind === "worktrees"
     );
   }
   private modalLines() {
@@ -1463,6 +1470,7 @@ export class App {
     if (modal.kind === "quick") return this.quickItems();
     if (modal.kind === "destinations") return this.destinationItems();
     if (modal.kind === "agents") return this.agentItems();
+    if (modal.kind === "worktrees") return this.worktreeItems();
     return this.choices();
   }
   private async openQuickOpen() {
@@ -1532,6 +1540,63 @@ export class App {
       index: 0,
       cancelMode: "app",
     });
+  }
+  /** List the current repository's worktrees, refreshed on every request. */
+  private async openWorktrees() {
+    const workspace = this.workspace();
+    if (this.options.worktrees) {
+      this.worktrees = this.options.worktrees;
+    } else {
+      try {
+        this.worktrees = await listWorktrees(workspace.path);
+      } catch (e) {
+        this.report(String(e));
+        return;
+      }
+    }
+    if (!this.worktrees.length) {
+      this.report("This repository has no worktrees to open");
+      return;
+    }
+    this.openModal({
+      kind: "worktrees",
+      title: `Worktrees of ${displayName(basename(workspace.path))}`,
+      text: "",
+      index: 0,
+      cancelMode: "app",
+    });
+  }
+  private worktreeItems(): Command[] {
+    return this.worktrees.map((worktree) => {
+      const open = this.state.workspaces.some(
+        (workspace) => resolve(workspace.path) === resolve(worktree.path),
+      );
+      const blocker = worktreeBlocker(worktree);
+      return {
+        name: `${worktreeLabel(worktree)}${worktree.primary ? " · primary" : ""}${open ? " · open" : ""}`,
+        ...(blocker ? { disabled: blocker } : {}),
+        action: () => this.openWorktree(worktree),
+      };
+    });
+  }
+  private openWorktree(worktree: Worktree) {
+    const path = resolve(worktree.path);
+    const existing = this.state.workspaces.find(
+      (workspace) => resolve(workspace.path) === path,
+    );
+    this.config = loadConfig(path).config;
+    this.refreshCatalogue();
+    if (existing) {
+      // Opening an already-open checkout focuses it instead of duplicating it.
+      this.state.active = existing.id;
+      this.report(`Focused the open workspace for ${worktreeLabel(worktree)}`);
+      return;
+    }
+    // Opening a worktree only creates a workspace; no tool is started for it.
+    const workspace = createWorkspace(path, this.config.preset, this.catalogue);
+    this.state.workspaces.push(workspace);
+    this.state.active = workspace.id;
+    this.report(`Opened worktree ${worktreeLabel(worktree)}`);
   }
   private destinationItems(): Command[] {
     const entries: {

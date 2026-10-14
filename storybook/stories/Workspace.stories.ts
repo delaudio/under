@@ -162,3 +162,11 @@ export const Destinations = {
 export const PreviewDestination = {
   render: () => terminalPreview("preview-destination"),
 } satisfies StoryObj;
+
+export const Worktrees = {
+  render: () => terminalPreview("worktrees"),
+} satisfies StoryObj;
+
+export const WorktreesNarrow = {
+  render: () => terminalPreview("worktrees-narrow"),
+} satisfies StoryObj;

@@ -194,6 +194,18 @@ kept. Hunk's editor action uses the same bridge, including the selected line.
 Deleted files remain governed by Hunk's normal behavior. No global editor
 configuration is changed.
 
+### Worktrees
+
+**Open a worktree…** lists the current repository's checkouts — the primary one,
+linked worktrees and detached HEAD checkouts — with their branch and how to reach
+them, and marks the ones already open. Choosing one opens it as its own workspace,
+or focuses it when it is already open, and starts no tool. A directory that no
+longer exists, a locked entry and a bare repository are listed with the reason
+they cannot be opened. Discovery runs only `git worktree list`, is bounded in time
+and size, and re-reads Git on every request, so worktrees created or removed
+outside Under appear immediately. Folders outside Git keep working as plain
+workspaces.
+
 ### Agents and context
 
 Codex, Claude Code and OpenCode run their native interactive CLI UIs. Install and
