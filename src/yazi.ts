@@ -49,8 +49,8 @@ export const REVIEW_BINDINGS = [
  * directory. Yazi only tells child processes its instance id, so the binding
  * runs `ya emit` from inside Yazi instead of addressing the instance from
  * outside. */
-export const REVEAL_KEY = "<F20>";
-export const REVEAL_KEY_BYTES = "\x1b[34~";
+export const REVEAL_KEY = "<C-S-F12>";
+export const REVEAL_KEY_BYTES = "\x1b[24;6~";
 export const REVEAL_FILE = "reveal.txt";
 
 const record = (v: unknown): v is Record<string, unknown> =>
