@@ -105,10 +105,31 @@ async function isFile(path: string) {
   }
 }
 
-/** First candidate that names an existing file, resolved against `roots`. */
+const PAGE = "(?:tsx|jsx|ts|js)";
+/** Source file that serves a web route such as `/[lang]/dashboard/suppliers`:
+ * a Next.js app-router `page`, or a pages-router file. Route groups like
+ * `(shop)` do not take part in the URL, so they are dropped before comparing. */
+export function routeFile(route: string, files: string[]): string | undefined {
+  const url = route.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  if (!url.startsWith("/") || url === "") return undefined;
+  const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const app = new RegExp(`(?:^|/)app${escaped}/page\\.${PAGE}$`);
+  const pages = new RegExp(
+    `(?:^|/)pages${escaped}(?:/index)?\\.${PAGE}$`,
+  );
+  return files.find((file) => {
+    const plain = file.replace(/\/\([^/)]+\)(?=\/)/g, "");
+    return app.test(plain) || pages.test(plain);
+  });
+}
+
+/** First candidate that names an existing file, resolved against `roots`. When
+ * none does, a candidate that looks like a web route is mapped to its page
+ * source using `listFiles` (paths relative to the first root). */
 export async function resolvePathLink(
   candidates: string[],
   roots: string[],
+  listFiles?: () => Promise<string[]>,
 ): Promise<PathLink | undefined> {
   for (const candidate of candidates) {
     const link = parseLocation(candidate);
@@ -121,5 +142,12 @@ export async function resolvePathLink(
     for (const path of bases)
       if (await isFile(path)) return { ...link, path };
   }
+  if (listFiles && roots.length)
+    for (const candidate of candidates) {
+      const link = parseLocation(candidate);
+      if (!link || !link.path.startsWith("/")) continue;
+      const found = routeFile(link.path, await listFiles());
+      if (found) return { ...link, path: resolve(roots[roots.length - 1]!, found), line: 1, column: 0 };
+    }
   return undefined;
 }

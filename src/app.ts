@@ -393,6 +393,7 @@ export class App {
     const link = await resolvePathLink(
       pathCandidates(lines, row, col),
       [pane?.cwd, w.path].filter((p): p is string => !!p),
+      () => listFiles(w.path),
     );
     if (!link) {
       this.report("No file found at that position");
