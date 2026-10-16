@@ -162,7 +162,7 @@ test("the Yazi overlay writes review bindings when the user has no keymap", asyn
       (entry) => entry.on,
     );
     // The reveal binding is added whenever `ya` is installed.
-    expect(ons.filter((on) => on !== "<F20>")).toEqual(["R", "C"]);
+    expect(ons.filter((on) => on !== "<C-S-F12>")).toEqual(["R", "C"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
