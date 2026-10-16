@@ -45,6 +45,14 @@ export const REVIEW_BINDINGS = [
   { on: "C", args: "--staged", desc: "Review staged changes in Under Hunk" },
 ] as const;
 
+/** Key Under sends to Yazi to reveal the path in `reveal.txt` of its config
+ * directory. Yazi only tells child processes its instance id, so the binding
+ * runs `ya emit` from inside Yazi instead of addressing the instance from
+ * outside. */
+export const REVEAL_KEY = "<F20>";
+export const REVEAL_KEY_BYTES = "\x1b[34~";
+export const REVEAL_FILE = "reveal.txt";
+
 const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
 
@@ -132,7 +140,7 @@ export async function yaziConfig(options: {
             taken.add(entry.on);
     }
     const quoted = tool?.replaceAll("'", "'\\''");
-    const bindings = quoted
+    const bindings: { on: string; run: string; desc: string }[] = quoted
       ? REVIEW_BINDINGS.filter((binding) => !taken.has(binding.on)).map(
           (binding) => ({
             on: binding.on,
@@ -141,6 +149,19 @@ export async function yaziConfig(options: {
           }),
         )
       : [];
+    const ya = Bun.which("ya");
+    // Skip when the path could not be quoted safely or the user owns the key.
+    if (
+      ya &&
+      !taken.has(REVEAL_KEY) &&
+      /^[\w/.+-]+$/.test(directory) &&
+      /^[\w/.+-]+$/.test(ya)
+    )
+      bindings.push({
+        on: REVEAL_KEY,
+        run: `shell --orphan '${ya} emit reveal "$(cat ${join(directory, REVEAL_FILE)})"'`,
+        desc: "Reveal the file Under asks for",
+      });
     if (entries.includes("keymap.toml") || bindings.length) {
       if (bindings.length)
         mgr.prepend_keymap = [

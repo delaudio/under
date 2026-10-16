@@ -11,7 +11,13 @@ import { stat, writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { basename, resolve, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { yaziConfig, yaziVersion } from "./yazi.ts";
+import {
+  REVEAL_FILE,
+  REVEAL_KEY_BYTES,
+  yaziConfig,
+  yaziVersion,
+} from "./yazi.ts";
+import { pathCandidates, resolvePathLink } from "./pathlink.ts";
 import { repaint } from "./repaint.ts";
 import { terminalResponse } from "./terminal.ts";
 import { FileBrowser, displayName, type FileEntry } from "./files.ts";
@@ -157,6 +163,7 @@ export class App {
   private timer: ReturnType<typeof setInterval>;
   private helperDir = "";
   private yaziDirectories = new Set<string>();
+  private yaziConfigs = new Map<string, string>();
 
   constructor(
     readonly renderer: CliRenderer,
@@ -373,6 +380,44 @@ export class App {
     if (pane) this.tab().focused = pane.id;
     this.input.mode = pane ? "terminal" : "app";
     this.draw();
+  }
+  /** Open the file named at a terminal cell in Neovim and reveal it in Yazi. */
+  private async openPathAt(
+    paneId: string,
+    lines: string[],
+    row: number,
+    col: number,
+  ) {
+    const w = this.workspace();
+    const pane = this.tab().panes.find((p) => p.id === paneId);
+    const link = await resolvePathLink(
+      pathCandidates(lines, row, col),
+      [pane?.cwd, w.path].filter((p): p is string => !!p),
+    );
+    if (!link) {
+      this.report("No file found at that position");
+      return;
+    }
+    const editor = this.editor();
+    await editor.runtime.editor!.openFile(link.path, link.line, link.column);
+    await this.revealInYazi(link.path);
+    w.activeTab = w.tabs.find((t) =>
+      t.panes.some((p) => p.id === editor.pane.id),
+    )!.id;
+    this.tab().focused = editor.pane.id;
+    this.filesFocused = false;
+    this.input.mode = "terminal";
+    this.report(`Opened ${displayName(basename(link.path))}`);
+  }
+  private async revealInYazi(path: string) {
+    for (const pane of this.tab().panes) {
+      const directory = this.yaziConfigs.get(pane.id);
+      const host = this.runtimes.get(pane.id)?.host;
+      if (pane.kind !== "yazi" || !directory || host?.phase !== "running")
+        continue;
+      await Bun.write(join(directory, REVEAL_FILE), path);
+      host.write(new TextEncoder().encode(REVEAL_KEY_BYTES));
+    }
   }
   private async openYazi() {
     const pane = this.tab().panes.find((p) => p.kind === "yazi");
@@ -592,6 +637,7 @@ export class App {
         version: yaziVersion(profile.argv[0]!),
       });
       this.yaziDirectories.add(directory);
+      this.yaziConfigs.set(pane.id, directory);
       command.env = { ...command.env, YAZI_CONFIG_HOME: directory };
     }
     if (pane.kind === "task" && config.tasks[pane.profile]?.shell)
@@ -655,12 +701,28 @@ export class App {
       onData: (bytes, source) =>
         host.write(source === "response" ? terminalResponse(bytes) : bytes),
       onTerminalResize: (cols, rows) => host.resize(cols, rows),
-      onMouseDown: () => {
+      onMouseDown: (event) => {
         if (!this.modal) {
           this.tab().focused = pane.id;
           this.filesFocused = false;
           this.input.mode = "terminal";
           this.draw();
+          // Option/Ctrl+click on a path in any pane opens it. Cmd+click never
+          // reaches Under: the outer terminal claims it for its own links.
+          if (
+            event.button === 0 &&
+            (event.modifiers.alt || event.modifiers.ctrl) &&
+            pane.kind !== "nvim" &&
+            pane.kind !== "yazi"
+          )
+            this.run(() =>
+              this.openPathAt(
+                pane.id,
+                view.screen().lines,
+                event.y - view.y,
+                event.x - view.x,
+              ),
+            );
         }
       },
     });
