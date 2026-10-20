@@ -88,7 +88,7 @@ destination never restarts or reloads a tool.
 | r / s               | Working tree / staged diff in Hunk                        |
 | l                   | Redraw all terminal panes                                 |
 | p                   | Command palette                                          |
-| Tab / j / k         | Cycle panes                                              |
+| Tab / Shift-Tab / j / k | Cycle panes                                              |
 | t / w               | Next tab / workspace                                     |
 | z                   | Toggle focused-pane zoom                                 |
 | [ / ]               | Shrink / grow focused split                              |
@@ -98,8 +98,12 @@ destination never restarts or reloads a tool.
 | ? / h               | Shortcut help                                            |
 | q                   | Save layout and quit after checking unsaved buffers      |
 
-Ordinary keys, paste and mouse input belong to the focused tool. Application
-commands require navigation mode. A modal owns input until it is dismissed.
+**Ctrl+Left / Ctrl+Right** switch directly to the previous/next pane without
+Ctrl-G, ready to type. These keys are reserved by Under; other key combinations
+belong to the focused tool. On macOS, disable the matching Mission Control
+shortcuts in System Settings if they intercept these keys.
+
+Other application commands require navigation mode. A modal owns input until it is dismissed.
 Entering navigation mode is shown in the footer as `NAV`, together with the keys
 that become available, so it is clear where the next keystroke will go.
 

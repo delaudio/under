@@ -1083,7 +1083,7 @@ export class App {
     this.openModal({
       kind: "help",
       title: "Under shortcuts",
-      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\no: quick open  g: go to workspace or tab\nTab/j/k: cycle panes  1-9: layouts\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
+      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nCtrl+Left/Right: previous/next pane (no prefix)\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\no: quick open  g: go to workspace or tab\nTab/j/k: cycle panes  1-9: layouts\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
       index: 0,
       cancelMode: "app",
     });
@@ -1332,6 +1332,21 @@ export class App {
     }
   };
   private onKey = (key: KeyEvent) => {
+    if (
+      !this.modal &&
+      key.ctrl &&
+      !key.meta &&
+      !key.shift &&
+      ["left", "right"].includes(key.name)
+    ) {
+      key.preventDefault();
+      key.stopPropagation();
+      this.cyclePane(key.name === "left" ? -1 : 1);
+      this.filesFocused = false;
+      this.input.mode = "terminal";
+      this.draw();
+      return;
+    }
     const decision = this.input.handle(key);
     if (decision === "forward") {
       if (!this.activeRuntime() && ["return", "enter"].includes(key.name)) {
@@ -1462,11 +1477,7 @@ export class App {
       if (["tab", "j", "k"].includes(key.name)) {
         this.filesFocused = false;
         const step = key.name === "k" || key.shift ? -1 : 1;
-        // Cycle only the panes the active template shows; hidden panes keep
-        // running without being reachable from the keyboard.
-        const order = paneOrder(t.layout);
-        const index = order.indexOf(t.focused);
-        t.focused = order[(index + step + order.length) % order.length]!;
+        this.cyclePane(step);
       } else if (key.name === "m") this.openMenu("File");
       else if (key.name === "f") this.focusFiles();
       else if (key.name === "r") this.run(() => this.reviewHere(false));
@@ -1499,6 +1510,13 @@ export class App {
     }
     this.draw();
   };
+  private cyclePane(step: number) {
+    const tab = this.tab();
+    // Hidden panes keep running without being reachable from the keyboard.
+    const order = paneOrder(tab.layout);
+    const index = order.indexOf(tab.focused);
+    tab.focused = order[(index + step + order.length) % order.length]!;
+  }
   applyLayout(name?: string) {
     if (!name) return;
     const template = this.catalogue.templates[name];
