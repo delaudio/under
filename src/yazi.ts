@@ -123,6 +123,13 @@ export async function yaziConfig(options: {
         },
       ],
     };
+    // Route image opens through Under instead of Yazi's external image opener.
+    const open = record(config.open) ? config.open : {};
+    open.prepend_rules = [
+      { mime: "image/*", use: "edit" },
+      ...(Array.isArray(open.prepend_rules) ? open.prepend_rules : []),
+    ];
+    config.open = open;
     await writeFile(join(directory, "yazi.toml"), stringify(config));
 
     // Key bindings live in keymap.toml. Keep the user's file, add the review

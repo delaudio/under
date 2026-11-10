@@ -1,6 +1,7 @@
 import {
   BoxRenderable,
   TextRenderable,
+  ImageRenderable,
   EmbeddedTerminalRenderable,
   type CliRenderer,
   type KeyEvent,
@@ -8,7 +9,7 @@ import {
   type PasteEvent,
 } from "@opentui/core";
 import { stat, writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
-import { basename, resolve, join, relative } from "node:path";
+import { basename, resolve, join, relative, extname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
@@ -119,6 +120,12 @@ export class App {
   private sidebar: TextRenderable;
   private overlay: BoxRenderable;
   private overlayText: TextRenderable;
+  private imageView: ImageRenderable;
+  private imageFrame: BoxRenderable;
+  private imageText: TextRenderable;
+  private imageViewport: BoxRenderable;
+  private imageDrag?: { x: number; y: number };
+  private imagePreview?: { pane: string; title: string; status: string; zoom: number; panX: number; panY: number };
   private modal?: Modal;
   private side = true;
   private filesFocused = false;
@@ -285,6 +292,77 @@ export class App {
       fg: this.config.foreground,
     });
     this.overlay.add(this.overlayText);
+    this.imageFrame = new BoxRenderable(renderer, {
+      id: "image-frame",
+      position: "absolute",
+      border: true,
+      overflow: "hidden",
+      backgroundColor: this.config.background,
+      zIndex: 30,
+      visible: false,
+      onMouseDown: (event) => {
+        event.stopPropagation();
+        if (this.modal || !this.imagePreview) return;
+        this.tab().focused = this.imagePreview.pane;
+        this.filesFocused = false;
+        this.input.mode = "terminal";
+        this.draw();
+      },
+    });
+    this.imageText = new TextRenderable(renderer, {
+      id: "image-title",
+      fg: this.config.foreground,
+      wrapMode: "none",
+    });
+    this.imageFrame.add(this.imageText);
+    this.imageViewport = new BoxRenderable(renderer, {
+      id: "image-viewport",
+      position: "absolute",
+      left: 0,
+      top: 3,
+      overflow: "hidden",
+      onMouseDown: (event) => {
+        if (!this.modal && this.imagePreview && event.button === 0)
+          this.imageDrag = { x: event.x, y: event.y };
+      },
+      onMouseDrag: (event) => {
+        if (this.modal || !this.imagePreview || !this.imageDrag) return;
+        event.stopPropagation();
+        this.panImage(event.x - this.imageDrag.x, event.y - this.imageDrag.y);
+        this.imageDrag = { x: event.x, y: event.y };
+      },
+      onMouseUp: () => { this.imageDrag = undefined; },
+      onMouseDragEnd: () => { this.imageDrag = undefined; },
+      onMouseScroll: (event) => {
+        if (this.modal || !this.imagePreview) return;
+        event.stopPropagation();
+        if (event.scroll?.direction === "up") this.zoomImage(1.25);
+        if (event.scroll?.direction === "down") this.zoomImage(1 / 1.25);
+      },
+    });
+    this.imageFrame.add(this.imageViewport);
+    this.imageView = new ImageRenderable(renderer, {
+      id: "image-preview",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      fit: "fit",
+      protocol: "auto",
+      visible: false,
+      onLoad: (image) => {
+        if (!this.imagePreview) return;
+        this.imagePreview.status = `${image.width} × ${image.height}`;
+        this.draw();
+      },
+      onError: () => {
+        if (!this.imagePreview) return;
+        this.imagePreview.status =
+          "Cannot display this image (unreadable or unsupported file)."
+        this.draw();
+      },
+    });
+    this.imageViewport.add(this.imageView);
+    renderer.root.add(this.imageFrame);
     for (const v of [this.header, this.footer, this.sidebar, this.overlay])
       renderer.root.add(v);
     for (const label of MENU_LABELS) {
@@ -360,8 +438,10 @@ export class App {
       this.draw();
       return;
     }
+    if (this.openImage(entry.path)) return;
     const e = this.editor();
     await e.runtime.editor!.openFile(entry.path);
+    this.closeImage(e.pane.id);
     this.workspace().activeTab = this.workspace().tabs.find((t) =>
       t.panes.some((p) => p.id === e.pane.id),
     )!.id;
@@ -399,8 +479,13 @@ export class App {
       this.report("No file found at that position");
       return;
     }
+    if (this.openImage(link.path)) {
+      await this.revealInYazi(link.path);
+      return;
+    }
     const editor = this.editor();
     await editor.runtime.editor!.openFile(link.path, link.line, link.column);
+    this.closeImage(editor.pane.id);
     await this.revealInYazi(link.path);
     w.activeTab = w.tabs.find((t) =>
       t.panes.some((p) => p.id === editor.pane.id),
@@ -533,8 +618,10 @@ export class App {
     await b.start({
       open: async (path, line, column) => {
         if (this.shuttingDown) throw new Error("Under is shutting down");
+        if (this.openImage(path, w)) return;
         const e = this.editor(w);
         await e.runtime.editor!.openFile(path, line, column);
+        this.closeImage(e.pane.id);
         this.state.active = w.id;
         w.activeTab = w.tabs.find((t) =>
           t.panes.some((p) => p.id === e.pane.id),
@@ -806,6 +893,7 @@ export class App {
           await editor.runtime.editor!.openFile(
             resolve(this.workspace().path, text),
           );
+          this.closeImage(editor.pane.id);
           this.workspace().activeTab = this.workspace().tabs.find((t) =>
             t.panes.some((p) => p.id === editor.pane.id),
           )!.id;
@@ -1192,7 +1280,69 @@ export class App {
       cancelMode: "app",
     });
   }
+  /** Images bypass the editor, including when no Neovim pane is running. */
+  private openImage(path: string, workspace = this.workspace()): boolean {
+    if (
+      ![
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
+        ".tif", ".tiff", ".ico", ".avif", ".heic",
+      ].includes(extname(path).toLowerCase())
+    )
+      return false;
+    const tab = workspace.tabs.find((tab) =>
+      tab.id === workspace.activeTab && tab.panes.some((pane) => pane.kind === "nvim"),
+    ) ?? workspace.tabs.find((tab) => tab.panes.some((pane) => pane.kind === "nvim"));
+    const pane = tab?.panes.find((pane) => pane.kind === "nvim");
+    if (!tab || !pane) throw new Error("Add a Neovim pane to view images");
+    this.imageView.source = undefined;
+    this.imageDrag = undefined;
+    this.imagePreview = {
+      pane: pane.id,
+      title: `Image · ${displayName(basename(path))}`,
+      status: "Loading…",
+      zoom: 1, panX: 0, panY: 0,
+    };
+    this.state.active = workspace.id;
+    workspace.activeTab = tab.id;
+    tab.focused = pane.id;
+    this.filesFocused = false;
+    if (!this.modal) this.input.mode = "terminal";
+    this.imageView.source = path;
+    this.draw();
+    return true;
+  }
+  private zoomImage(factor: number) {
+    const preview = this.imagePreview;
+    if (!preview || !this.imageView.image) return;
+    const zoom = Math.max(1, Math.min(8, preview.zoom * factor));
+    preview.panX *= zoom / preview.zoom;
+    preview.panY *= zoom / preview.zoom;
+    preview.zoom = zoom;
+    this.draw();
+  }
+  private panImage(x: number, y: number) {
+    if (!this.imagePreview) return;
+    this.imagePreview.panX += x;
+    this.imagePreview.panY += y;
+    this.draw();
+  }
+  private resetImage() {
+    if (!this.imagePreview) return;
+    Object.assign(this.imagePreview, { zoom: 1, panX: 0, panY: 0 });
+    this.draw();
+  }
+  private imageFocused() {
+    return !!this.imagePreview && this.imagePreview.pane === this.tab().focused && !this.filesFocused;
+  }
+  private closeImage(pane = this.imagePreview?.pane) {
+    if (!this.imagePreview || pane !== this.imagePreview.pane) return;
+    this.imageView.source = undefined;
+    this.imagePreview = undefined;
+    this.imageDrag = undefined;
+    this.draw();
+  }
   private openModal(modal: Modal) {
+    this.imageDrag = undefined;
     modal.cancelMode = this.input.mode === "terminal" ? "terminal" : "app";
     this.modal = modal;
     this.input.mode = "modal";
@@ -1318,7 +1468,7 @@ export class App {
       });
   }
   private onPaste = (event: PasteEvent) => {
-    if (this.input.mode !== "terminal") {
+    if (this.input.mode !== "terminal" || this.imageFocused()) {
       event.preventDefault();
       event.stopPropagation();
       if (this.modal && App.hasInput(this.modal.kind)) {
@@ -1349,6 +1499,19 @@ export class App {
     }
     const decision = this.input.handle(key);
     if (decision === "forward") {
+      if (this.imageFocused()) {
+        key.preventDefault();
+        key.stopPropagation();
+        if (["escape", "return", "enter"].includes(key.name)) this.closeImage();
+        else if (["+", "="].includes(key.name)) this.zoomImage(1.25);
+        else if (["-", "_"].includes(key.name)) this.zoomImage(1 / 1.25);
+        else if (["0", "f"].includes(key.name)) this.resetImage();
+        else if (["left", "h"].includes(key.name)) this.panImage(4, 0);
+        else if (["right", "l"].includes(key.name)) this.panImage(-4, 0);
+        else if (["up", "k"].includes(key.name)) this.panImage(0, 2);
+        else if (["down", "j"].includes(key.name)) this.panImage(0, -2);
+        return;
+      }
       if (!this.activeRuntime() && ["return", "enter"].includes(key.name)) {
         key.preventDefault();
         key.stopPropagation();
@@ -1370,7 +1533,7 @@ export class App {
     key.stopPropagation();
     if (this.input.mode === "terminal") this.filesFocused = false;
     if (decision === "literal") {
-      this.activeRuntime()?.host.write(this.input.literal());
+      if (!this.imageFocused()) this.activeRuntime()?.host.write(this.input.literal());
       this.draw();
       return;
     }
@@ -1602,8 +1765,13 @@ export class App {
     ].slice(0, 20));
   }
   private async openQuickFile(path: string) {
+    if (this.openImage(resolve(this.workspace().path, path))) {
+      this.rememberRecent(path);
+      return;
+    }
     const editor = this.editor();
     await editor.runtime.editor!.openFile(resolve(this.workspace().path, path));
+    this.closeImage(editor.pane.id);
     this.rememberRecent(path);
     this.workspace().activeTab = this.workspace().tabs.find((t) =>
       t.panes.some((p) => p.id === editor.pane.id),
@@ -1935,7 +2103,7 @@ export class App {
         placeholder = { frame, text };
         this.placeholders.set(id, placeholder);
       }
-      placeholder.frame.visible = true;
+      placeholder.frame.visible = this.imagePreview?.pane !== id;
       placeholder.frame.left = cell.x;
       placeholder.frame.top = cell.y;
       placeholder.frame.width = cell.width;
@@ -1958,7 +2126,7 @@ export class App {
     }
     for (const [id, r] of this.runtimes) {
       const cell = cells.get(id);
-      r.frame.visible = !!cell;
+      r.frame.visible = !!cell && this.imagePreview?.pane !== id;
       if (!cell) {
         r.view.blur();
         continue;
@@ -1974,10 +2142,41 @@ export class App {
       if (
         id === t.focused &&
         this.input.mode === "terminal" &&
-        !this.filesFocused
+        !this.filesFocused &&
+        this.imagePreview?.pane !== id
       )
         r.view.focus();
       else r.view.blur();
+    }
+    if (this.imagePreview && !allPaneIds.has(this.imagePreview.pane)) {
+      this.imageView.source = undefined;
+      this.imagePreview = undefined;
+    }
+    const imageCell = this.imagePreview && cells.get(this.imagePreview.pane);
+    this.imageFrame.visible = !!imageCell;
+    this.imageView.visible = !!imageCell && imageCell.width >= 4 && imageCell.height >= 6;
+    if (imageCell && this.imagePreview) {
+      this.imageFrame.left = imageCell.x;
+      this.imageFrame.top = imageCell.y;
+      this.imageFrame.width = imageCell.width;
+      this.imageFrame.height = imageCell.height;
+      this.imageFrame.borderColor = this.imageFocused() ? this.config.accent : "#3a3a44";
+      const width = Math.max(1, imageCell.width - 2);
+      const height = Math.max(1, imageCell.height - 5);
+      this.imageViewport.width = width;
+      this.imageViewport.height = height;
+      const fitted = this.imageView.getFittedSize(width, height);
+      const scaledWidth = Math.max(1, Math.round(fitted.width * this.imagePreview.zoom));
+      const scaledHeight = Math.max(1, Math.round(fitted.height * this.imagePreview.zoom));
+      const limitX = Math.max(0, (scaledWidth - width) / 2);
+      const limitY = Math.max(0, (scaledHeight - height) / 2);
+      this.imagePreview.panX = Math.max(-limitX, Math.min(limitX, this.imagePreview.panX));
+      this.imagePreview.panY = Math.max(-limitY, Math.min(limitY, this.imagePreview.panY));
+      this.imageView.width = scaledWidth;
+      this.imageView.height = scaledHeight;
+      this.imageView.left = Math.round((width - scaledWidth) / 2 + this.imagePreview.panX);
+      this.imageView.top = Math.round((height - scaledHeight) / 2 + this.imagePreview.panY);
+      this.imageText.content = `${this.imagePreview.title}\n${this.imagePreview.status} · ${Math.round(this.imagePreview.zoom * 100)}% fit\n+/- zoom · arrows/drag pan · 0 fit · Esc close`;
     }
     // Draggable boundaries sit above the panes so grabbing one never reaches a
     // tool's own mouse handling. They stay transparent until hovered or dragged,

@@ -79,7 +79,10 @@ test("Yazi overlay preserves configuration with a single-column layout and edito
     });
     const result = parse(await readFile(join(overlay, "yazi.toml"), "utf8"));
     expect(result.mgr).toEqual({ show_hidden: true, ratio: [0, 1, 0] });
-    expect(result.open).toEqual(parse(original).open);
+    expect((result.open as any).prepend_rules).toEqual([
+      { mime: "image/*", use: "edit" },
+      ...(parse(original).open as any).prepend_rules,
+    ]);
     expect((result.opener as any).play).toEqual(
       (parse(original).opener as any).play,
     );

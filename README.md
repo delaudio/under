@@ -57,6 +57,19 @@ If Yazi is missing or stopped, a basic file list provides
 arrows/j/k, Enter to open, left for parent, and r to refresh; that fallback omits
 `.git`, `.under` and `node_modules`.
 
+PNG, JPEG, WebP and GIF files opened from Yazi, the fallback file list, Quick
+Open or terminal path links appear in the Neovim pane, keeping the other panes available.
+The image fits the pane; **Esc** or **Enter** returns to the editor with its
+buffers preserved. Opening a text file also returns that pane to Neovim.
+You can switch to files or agents while the image stays visible.
+Use **+ / -** or the **mouse wheel** to zoom (up to 8× the fitted size),
+**arrow keys / h j k l** or **drag** to pan, and **0 / f** to fit and centre
+again. Zoom and pan stay clipped to the editor pane.
+Under uses the terminal's graphics support when available, with a coloured-block
+fallback otherwise. GIF previews are static. Other recognised raster formats
+show an error if the decoder does not support them. The explicit **Open file in
+Neovim** command remains available to open a file as text.
+
 Open **Review → Working tree diff** or **Review → Staged diff** to start Hunk in
 a dedicated tab. **Ctrl-G r** and **Ctrl-G s** do the same. Repeated actions reuse
 the matching tab; the editor and its unsaved buffers stay alive.
