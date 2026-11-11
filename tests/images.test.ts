@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
-import { ImageRenderable } from "@opentui/core";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { ImageRenderable, NativeImage } from "@opentui/core";
+import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { App, type PaneEditor, type PaneHost } from "../src/app.ts";
+import { encodePng } from "../src/image-annotations.ts";
 import { defaults } from "../src/config.ts";
 
 const png = Buffer.from(
@@ -239,5 +240,98 @@ test("image uses the editor pane while other tools work, and a text file restore
     app.disposeUI();
     await setup.dispose();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("drawing and undo export independent PNG copies while the original stays unchanged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "under-annotate-ui-"));
+  const setup = await createTestRenderer({ width: 120, height: 30 });
+  const copies: string[] = [];
+  const path = join(root, "original.png");
+  const pixels = new Uint8Array(100 * 80 * 4);
+  for (let i = 0; i < pixels.length; i += 4) pixels.set([40, 50, 60, 255], i);
+  const original = await encodePng(pixels, 100, 80);
+  await writeFile(path, original);
+  const app = new App(setup.renderer, root, undefined, {
+    config: defaults, files: [], quickFiles: ["original.png"],
+    copyImage: async (path) => { copies.push(path); },
+  });
+  const wait = async (predicate: () => boolean) => {
+    for (let i = 0; i < 100; i++) {
+      await Bun.sleep(10);
+      await setup.flush();
+      if (predicate()) return;
+    }
+    throw new Error("Timed out waiting for image export");
+  };
+  try {
+    setup.mockInput.pressKey("g", { ctrl: true });
+    setup.mockInput.pressKey("o");
+    setup.mockInput.pressEnter();
+    const view = setup.renderer.root.findDescendantById("image-preview") as ImageRenderable;
+    await wait(() => !!view.image);
+    setup.mockInput.pressKey("a");
+    await setup.flush();
+    const start = { x: view.x + 5, y: view.y + 3 };
+    const interiorColor = () => {
+      let column = 0;
+      for (const span of setup.captureSpans().lines[start.y + 3]!.spans) {
+        if (column + span.width > start.x + 6) return span.bg.toInts();
+        column += span.width;
+      }
+      throw new Error("Image interior is outside the captured frame");
+    };
+    const beforeAnnotation = interiorColor();
+    expect(beforeAnnotation.slice(0, 3)).toEqual([40, 50, 60]);
+    await setup.mockMouse.drag(start.x, start.y, start.x + 12, start.y + 6);
+    await setup.flush();
+    expect(setup.renderer.root.findDescendantById("image-annotation-0")?.visible).toBe(true);
+    expect(interiorColor()).toEqual(beforeAnnotation);
+    setup.mockInput.pressKey("+");
+    await setup.flush();
+    const rectangle = setup.renderer.root.findDescendantById("image-annotation-0")!;
+    const originalBox = { x: rectangle.x, y: rectangle.y, width: rectangle.width, height: rectangle.height };
+    await setup.mockMouse.drag(rectangle.x + 3, rectangle.y + 2, rectangle.x + 6, rectangle.y + 3);
+    await setup.flush();
+    expect(rectangle.x).toBe(originalBox.x + 3);
+    expect(rectangle.y).toBe(originalBox.y + 1);
+    expect([rectangle.width, rectangle.height]).toEqual([originalBox.width, originalBox.height]);
+    expect(setup.renderer.root.findDescendantById("image-annotation-1")).toBeUndefined();
+    setup.mockInput.pressKey("c");
+    await wait(() => copies.length === 1);
+    const annotated = NativeImage.decode(await readFile(copies[0]!));
+    try {
+      expect([annotated.width, annotated.height]).toEqual([100, 80]);
+      const output = new Uint8Array(pixels.length);
+      annotated.copyTo(output);
+      expect(output).not.toEqual(pixels);
+      expect(output.some((value, index) => index % 4 === 0 && value === 255)).toBe(true);
+    } finally { annotated.dispose(); }
+    expect(await readFile(path)).toEqual(original);
+    setup.mockInput.pressKey("u");
+    await setup.flush();
+    expect(setup.renderer.root.findDescendantById("image-annotation-0")?.visible).toBe(false);
+    setup.mockInput.pressKey("c");
+    await wait(() => copies.length === 2);
+    const clean = NativeImage.decode(await readFile(copies[1]!));
+    try {
+      const output = new Uint8Array(pixels.length);
+      clean.copyTo(output);
+      expect(output).toEqual(pixels);
+    } finally { clean.dispose(); }
+    let copiedPath = "";
+    setup.renderer.copyToClipboardOSC52 = (path) => { copiedPath = path; return true; };
+    setup.mockInput.pressKey("p");
+    await wait(() => !!copiedPath);
+    copies.push(copiedPath);
+    expect(copiedPath).toContain("under-annotation-");
+    expect((await readFile(copiedPath)).subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect(copies[0]).not.toBe(copies[1]);
+    expect(await readFile(path)).toEqual(original);
+  } finally {
+    app.disposeUI();
+    await setup.dispose();
+    await rm(root, { recursive: true, force: true });
+    for (const copy of copies) await rm(dirname(copy), { recursive: true, force: true });
   }
 });

@@ -65,6 +65,24 @@ You can switch to files or agents while the image stays visible.
 Use **+ / -** or the **mouse wheel** to zoom (up to 8× the fitted size),
 **arrow keys / h j k l** or **drag** to pan, and **0 / f** to fit and centre
 again. Zoom and pan stay clipped to the editor pane.
+Press **a** to switch between pan and annotation mode. In annotation mode,
+**drag** to draw red rectangles. Drag inside an existing rectangle to move it;
+**Shift-drag** draws a new rectangle even over an existing one. Rectangles stay
+inside the image when moved. Press **u** to remove the last rectangle.
+Press **c** to copy an annotated PNG to the system clipboard, then use the
+agent client's image-paste action. On macOS this uses the native clipboard;
+Linux requires `wl-copy` (Wayland) or `xclip` (X11). Image pasting depends on
+the agent client. **p** exports a PNG and copies its local path via the terminal
+clipboard, for agents that can read image files. Over SSH, use the path option
+with an agent on that same host.
+
+Annotations only exist in the viewer and disappear when the image is closed or
+replaced. Copies contain the full image at its original resolution, regardless
+of zoom/pan, and never overwrite the source. Each copy is saved under the system
+temporary directory as `under-annotation-*/annotated.png`; it remains available
+after closing Under until the OS cleans temporary files. Export supports images
+up to 16 million pixels. Nothing is submitted to an agent automatically.
+
 Under uses the terminal's graphics support when available, with a coloured-block
 fallback otherwise. GIF previews are static. Other recognised raster formats
 show an error if the decoder does not support them. The explicit **Open file in

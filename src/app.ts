@@ -19,6 +19,7 @@ import {
   yaziVersion,
 } from "./yazi.ts";
 import { pathCandidates, resolvePathLink } from "./pathlink.ts";
+import { imagePoint, boxBounds, moveBox, exportAnnotatedImage, copyImageToClipboard, type ImageBox, type ImagePoint } from "./image-annotations.ts";
 import { repaint } from "./repaint.ts";
 import { terminalResponse } from "./terminal.ts";
 import { FileBrowser, displayName, type FileEntry } from "./files.ts";
@@ -125,7 +126,10 @@ export class App {
   private imageText: TextRenderable;
   private imageViewport: BoxRenderable;
   private imageDrag?: { x: number; y: number };
-  private imagePreview?: { pane: string; title: string; status: string; zoom: number; panX: number; panY: number };
+  private annotationDraft?: ImageBox;
+  private annotationMove?: { index: number; original: ImageBox; start: ImagePoint };
+  private annotationViews: BoxRenderable[] = [];
+  private imagePreview?: { pane: string; title: string; status: string; zoom: number; panX: number; panY: number; annotate: boolean; boxes: ImageBox[] };
   private modal?: Modal;
   private side = true;
   private filesFocused = false;
@@ -184,6 +188,7 @@ export class App {
       /** Deterministic worktree list for previews. */
       worktrees?: Worktree[];
       available?: (command: string) => boolean;
+      copyImage?: typeof copyImageToClipboard;
     } = {},
   ) {
     const loaded = options.config
@@ -322,19 +327,41 @@ export class App {
       top: 3,
       overflow: "hidden",
       onMouseDown: (event) => {
-        if (!this.modal && this.imagePreview && event.button === 0)
-          this.imageDrag = { x: event.x, y: event.y };
+        if (this.modal || !this.imagePreview || !this.imageView.image || event.button !== 0) return;
+        if (this.imagePreview.annotate) {
+          const point = this.annotationPoint(event.x, event.y);
+          // Last drawn wins when boxes overlap; Shift always starts a new box.
+          const index = event.modifiers.shift ? -1 : this.imagePreview.boxes.findLastIndex((box) => {
+            const b = boxBounds(box);
+            return point.x >= b.left && point.x <= b.left + b.width &&
+              point.y >= b.top && point.y <= b.top + b.height;
+          });
+          if (index >= 0) this.annotationMove = {
+            index, original: structuredClone(this.imagePreview.boxes[index]!), start: point,
+          };
+          else this.annotationDraft = { start: point, end: point };
+        } else this.imageDrag = { x: event.x, y: event.y };
       },
       onMouseDrag: (event) => {
-        if (this.modal || !this.imagePreview || !this.imageDrag) return;
-        event.stopPropagation();
-        this.panImage(event.x - this.imageDrag.x, event.y - this.imageDrag.y);
-        this.imageDrag = { x: event.x, y: event.y };
-      },
-      onMouseUp: () => { this.imageDrag = undefined; },
-      onMouseDragEnd: () => { this.imageDrag = undefined; },
-      onMouseScroll: (event) => {
         if (this.modal || !this.imagePreview) return;
+        event.stopPropagation();
+        if (this.annotationMove) {
+          const point = this.annotationPoint(event.x, event.y);
+          const move = this.annotationMove;
+          this.imagePreview.boxes[move.index] = moveBox(move.original, point.x - move.start.x, point.y - move.start.y);
+          this.draw();
+        } else if (this.annotationDraft) {
+          this.annotationDraft.end = this.annotationPoint(event.x, event.y);
+          this.draw();
+        } else if (this.imageDrag) {
+          this.panImage(event.x - this.imageDrag.x, event.y - this.imageDrag.y);
+          this.imageDrag = { x: event.x, y: event.y };
+        }
+      },
+      onMouseUp: () => this.finishAnnotation(),
+      onMouseDragEnd: () => this.finishAnnotation(),
+      onMouseScroll: (event) => {
+        if (this.modal || !this.imagePreview || this.annotationDraft || this.annotationMove) return;
         event.stopPropagation();
         if (event.scroll?.direction === "up") this.zoomImage(1.25);
         if (event.scroll?.direction === "down") this.zoomImage(1 / 1.25);
@@ -1296,11 +1323,13 @@ export class App {
     if (!tab || !pane) throw new Error("Add a Neovim pane to view images");
     this.imageView.source = undefined;
     this.imageDrag = undefined;
+    this.annotationDraft = undefined;
+    this.annotationMove = undefined;
     this.imagePreview = {
       pane: pane.id,
       title: `Image · ${displayName(basename(path))}`,
       status: "Loading…",
-      zoom: 1, panX: 0, panY: 0,
+      zoom: 1, panX: 0, panY: 0, annotate: false, boxes: [],
     };
     this.state.active = workspace.id;
     workspace.activeTab = tab.id;
@@ -1310,6 +1339,61 @@ export class App {
     this.imageView.source = path;
     this.draw();
     return true;
+  }
+  private annotationPoint(x: number, y: number) {
+    const viewport = this.imageViewport;
+    return imagePoint(
+      Math.max(viewport.x, Math.min(viewport.x + viewport.width, x)),
+      Math.max(viewport.y, Math.min(viewport.y + viewport.height, y)),
+      this.imageView.x, this.imageView.y, this.imageView.width, this.imageView.height,
+    );
+  }
+  private finishAnnotation() {
+    if (this.annotationDraft && this.imagePreview) {
+      const bounds = boxBounds(this.annotationDraft);
+      if (bounds.width > 0 && bounds.height > 0)
+        this.imagePreview.boxes.push(this.annotationDraft);
+    }
+    this.annotationDraft = undefined;
+    this.annotationMove = undefined;
+    this.imageDrag = undefined;
+    this.draw();
+  }
+  private toggleAnnotations() {
+    if (!this.imagePreview) return;
+    this.annotationDraft = undefined;
+    this.annotationMove = undefined;
+    this.imageDrag = undefined;
+    this.imagePreview.annotate = !this.imagePreview.annotate;
+    this.report(this.imagePreview.annotate
+      ? "Draw: drag to draw/move · Shift-drag new box · u undo · c copy PNG · p copy path · a pan mode"
+      : "Pan: drag image · a draw boxes · c copy PNG · p copy path");
+  }
+  private async copyAnnotatedImage(asPath: boolean) {
+    const image = this.imageView.image;
+    const preview = this.imagePreview;
+    if (!image || !preview) throw new Error("Wait for the image to load before copying");
+    this.finishAnnotation();
+    // Snapshot before awaiting: changing files while exporting cannot retarget the copy.
+    const { width, height } = image;
+    if (width * height > 16_000_000) throw new Error("Image is too large to annotate (maximum 16 million pixels)");
+    const pixels = new Uint8Array(width * height * 4);
+    image.copyTo(pixels);
+    const boxes = structuredClone(preview.boxes);
+    const { path, png } = await exportAnnotatedImage(pixels, width, height, boxes);
+    if (asPath) {
+      if (!this.renderer.copyToClipboardOSC52(path))
+        throw new Error(`Could not copy path. Annotated PNG: ${path}`);
+      this.report(`PNG path sent to clipboard: ${path}`);
+    } else {
+      try {
+        if (this.renderer.capabilities?.remote) throw new Error("Image clipboard unavailable in a remote terminal; use p to copy the PNG path");
+        await (this.options.copyImage ?? copyImageToClipboard)(path, png);
+      } catch (error) {
+        throw new Error(`${String(error)}. Annotated PNG: ${path}`);
+      }
+      this.report("Annotated PNG copied. Paste in your agent chat; original unchanged.");
+    }
   }
   private zoomImage(factor: number) {
     const preview = this.imagePreview;
@@ -1339,10 +1423,14 @@ export class App {
     this.imageView.source = undefined;
     this.imagePreview = undefined;
     this.imageDrag = undefined;
+    this.annotationDraft = undefined;
+    this.annotationMove = undefined;
     this.draw();
   }
   private openModal(modal: Modal) {
     this.imageDrag = undefined;
+    this.annotationDraft = undefined;
+    this.annotationMove = undefined;
     modal.cancelMode = this.input.mode === "terminal" ? "terminal" : "app";
     this.modal = modal;
     this.input.mode = "modal";
@@ -1503,6 +1591,15 @@ export class App {
         key.preventDefault();
         key.stopPropagation();
         if (["escape", "return", "enter"].includes(key.name)) this.closeImage();
+        else if (key.name === "a") this.toggleAnnotations();
+        else if (key.name === "u") {
+          this.annotationDraft = undefined;
+          this.annotationMove = undefined;
+          this.imagePreview?.boxes.pop();
+          this.draw();
+        }
+        else if (key.name === "c") this.run(() => this.copyAnnotatedImage(false));
+        else if (key.name === "p") this.run(() => this.copyAnnotatedImage(true));
         else if (["+", "="].includes(key.name)) this.zoomImage(1.25);
         else if (["-", "_"].includes(key.name)) this.zoomImage(1 / 1.25);
         else if (["0", "f"].includes(key.name)) this.resetImage();
@@ -2176,7 +2273,34 @@ export class App {
       this.imageView.height = scaledHeight;
       this.imageView.left = Math.round((width - scaledWidth) / 2 + this.imagePreview.panX);
       this.imageView.top = Math.round((height - scaledHeight) / 2 + this.imagePreview.panY);
-      this.imageText.content = `${this.imagePreview.title}\n${this.imagePreview.status} · ${Math.round(this.imagePreview.zoom * 100)}% fit\n+/- zoom · arrows/drag pan · 0 fit · Esc close`;
+      const boxes = [...this.imagePreview.boxes, ...(this.annotationDraft ? [this.annotationDraft] : [])];
+      boxes.forEach((box, index) => {
+        let view = this.annotationViews[index];
+        if (!view) {
+          view = new BoxRenderable(this.renderer, {
+            id: `image-annotation-${index}`,
+            position: "absolute",
+            border: true,
+            borderColor: "#ff0000",
+            // Border-only overlay: filling even with transparent cells can
+            // occlude terminal graphics underneath the rectangle.
+            backgroundColor: "transparent",
+            shouldFill: false,
+            zIndex: 1,
+          });
+          this.annotationViews.push(view);
+          this.imageViewport.add(view);
+        }
+        const bounds = boxBounds(box);
+        view.visible = true;
+        view.left = Number(this.imageView.left) + Math.round(bounds.left * scaledWidth);
+        view.top = Number(this.imageView.top) + Math.round(bounds.top * scaledHeight);
+        view.width = Math.max(1, Math.round(bounds.width * scaledWidth));
+        view.height = Math.max(1, Math.round(bounds.height * scaledHeight));
+      });
+      for (const view of this.annotationViews.slice(boxes.length)) view.visible = false;
+      this.imageText.content = `${this.imagePreview.title}\n${this.imagePreview.status} · ${Math.round(this.imagePreview.zoom * 100)}% fit · ${this.imagePreview.annotate ? "DRAW" : "PAN"}\na draw/pan · u undo · c PNG · p path`;
+
     }
     // Draggable boundaries sit above the panes so grabbing one never reaches a
     // tool's own mouse handling. They stay transparent until hovered or dragged,
