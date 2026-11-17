@@ -251,6 +251,15 @@ test("reviews can open in herdr-reviewr, falling back to Hunk where it has no sc
   Bun.spawnSync(["git", "init", "-q"], { cwd: repo });
   const setup = await createTestRenderer({ width: 120, height: 30 });
   const idle = { argv: ["/bin/sleep", "30"] };
+  // Panes reload the configuration from disk when they start, so the stand-in
+  // profiles must live there too: CI has no herdr-reviewr.
+  await writeFile(
+    join(repo, ".under.json"),
+    JSON.stringify({
+      reviewTool: "reviewr",
+      profiles: { reviewr: idle, hunk: idle, "hunk-staged": idle },
+    }),
+  );
   const config = {
     ...defaults,
     reviewTool: "reviewr" as const,
