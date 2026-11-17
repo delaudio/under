@@ -60,7 +60,8 @@ export type TemplateName =
   | "editor-chat"
   | "editor"
   | "run"
-  | "editor-chat-stack";
+  | "editor-chat-stack"
+  | "chat-shell";
 export type TemplateSlot = { kind: PaneKind; profile?: string };
 /** Serialized split tree a configuration file can express: leaves are slot indexes. */
 export type NumberLayout =
@@ -102,6 +103,9 @@ export const shapeToLayout = (
         first: shapeToLayout(shape.first, id),
         second: shapeToLayout(shape.second, id),
       };
+/** Shortcut digit of the built-in at `index`: 1–9, then 0 for the tenth. */
+export const layoutDigit = (index: number) =>
+  index < 9 ? String(index + 1) : index === 9 ? "0" : "";
 /** Shortcut order: the digit after the navigation prefix applies each template. */
 export const TEMPLATE_ORDER: TemplateName[] = [
   "chat",
@@ -113,6 +117,7 @@ export const TEMPLATE_ORDER: TemplateName[] = [
   "editor",
   "run",
   "editor-chat-stack",
+  "chat-shell",
 ];
 const row = (
   ratio: number,
@@ -185,7 +190,7 @@ export const TEMPLATES: Record<TemplateName, Template> = {
     shape: 0,
   },
   run: {
-    label: "shell only",
+    label: "terminal only",
     slots: [{ kind: "shell", profile: "shell" }],
     focus: 0,
     shape: 0,
@@ -196,6 +201,13 @@ export const TEMPLATES: Record<TemplateName, Template> = {
       { kind: "nvim", profile: "nvim" },
       { kind: "agent" },
     ],
+    focus: 0,
+    shape: column(0.6, 0, 1),
+  },
+  // A free terminal under the agent, for commands while it works.
+  "chat-shell": {
+    label: "chat above terminal",
+    slots: [{ kind: "agent" }, { kind: "shell", profile: "shell" }],
     focus: 0,
     shape: column(0.6, 0, 1),
   },

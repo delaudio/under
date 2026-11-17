@@ -161,8 +161,14 @@ test("the Yazi overlay writes review bindings when the user has no keymap", asyn
     const ons = ((keymap.mgr as Record<string, unknown>).prepend_keymap as Array<Record<string, string>>).map(
       (entry) => entry.on,
     );
-    // The reveal binding is added whenever `ya` is installed.
-    expect(ons.filter((on) => on !== "<C-S-F12>")).toEqual(["R", "C"]);
+    // The reveal binding is added whenever `ya` is installed; the hidden-file
+    // bindings always are.
+    expect(ons.filter((on) => on !== "<C-S-F12>")).toEqual([
+      "R",
+      "C",
+      "<C-S-F11>",
+      "<C-S-F10>",
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -239,3 +245,41 @@ test.skipIf(!Bun.which("hunk") || process.env.UNDER_NO_SOCKETS === "1")(
   },
   40_000,
 );
+
+test("reviews can open in herdr-reviewr, falling back to Hunk where it has no scope", async () => {
+  const repo = await realpath(await mkdtemp(join(tmpdir(), "under-reviewr-")));
+  Bun.spawnSync(["git", "init", "-q"], { cwd: repo });
+  const setup = await createTestRenderer({ width: 120, height: 30 });
+  const idle = { argv: ["/bin/sleep", "30"] };
+  // Panes reload the configuration from disk when they start, so the stand-in
+  // profiles must live there too: CI has no herdr-reviewr.
+  await writeFile(
+    join(repo, ".under.json"),
+    JSON.stringify({
+      reviewTool: "reviewr",
+      profiles: { reviewr: idle, hunk: idle, "hunk-staged": idle },
+    }),
+  );
+  const config = {
+    ...defaults,
+    reviewTool: "reviewr" as const,
+    profiles: { ...defaults.profiles, reviewr: idle, hunk: idle, "hunk-staged": idle },
+  };
+  const app = new App(setup.renderer, repo, undefined, { config, files: [] });
+  try {
+    await app.openReview({ from: "main" });
+    let pane = app.tab().panes.find((p) => p.kind === "hunk")!;
+    expect([pane.profile, pane.args]).toEqual(["reviewr", ["--base", "main"]]);
+    expect(app.tab().name).toBe("reviewr · diff main");
+    // Staged changes are Hunk's: reviewr has no staged scope.
+    await app.openReview({ staged: true });
+    pane = app.tab().panes.find((p) => p.kind === "hunk")!;
+    expect(pane.profile).toBe("hunk-staged");
+    await app.openReview({ tool: "hunk" });
+    expect(app.tab().panes.find((p) => p.kind === "hunk")!.profile).toBe("hunk");
+  } finally {
+    await app.shutdown(true);
+    await setup.dispose();
+    await rm(repo, { recursive: true, force: true });
+  }
+});

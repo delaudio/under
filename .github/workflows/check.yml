@@ -31,7 +31,7 @@ jobs:
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             brew install yazi
           else
-            curl -fsSL https://github.com/sxyazi/yazi/releases/download/v25.5.31/yazi-x86_64-unknown-linux-musl.zip -o yazi.zip
+            curl -fsSL https://github.com/sxyazi/yazi/releases/download/v26.9.1/yazi-x86_64-unknown-linux-musl.zip -o yazi.zip
             unzip -q yazi.zip
             echo "$PWD/yazi-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
           fi

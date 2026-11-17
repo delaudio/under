@@ -9,15 +9,22 @@ import {
   type PasteEvent,
 } from "@opentui/core";
 import { stat, writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
-import { basename, resolve, join, relative, extname } from "node:path";
+import { basename, resolve, join, relative, extname, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
+import { readFileSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   REVEAL_FILE,
   REVEAL_KEY_BYTES,
+  HIDDEN_KEYS,
+  installedBindings,
+  HOVER_ENV,
+  HOVER_FILE,
   yaziConfig,
+  yaziShowsHidden,
   yaziVersion,
 } from "./yazi.ts";
+import { bufferStrip, type TabHit } from "./tabs.ts";
 import { pathCandidates, resolvePathLink } from "./pathlink.ts";
 import { imagePoint, boxBounds, moveBox, exportAnnotatedImage, copyImageToClipboard, type ImageBox, type ImagePoint } from "./image-annotations.ts";
 import { repaint } from "./repaint.ts";
@@ -28,12 +35,23 @@ import { fuzzyScore, listFiles, rank } from "./search.ts";
 import { chmod } from "node:fs/promises";
 import { InputOwner } from "./input.ts";
 import { PtyHost } from "./pty.ts";
-import { Editor, type EditorSnapshot } from "./editor.ts";
+import {
+  Editor,
+  type EditorBuffers,
+  type EditorSnapshot,
+} from "./editor.ts";
 import { FileBridge } from "./bridge.ts";
 import { fileDiff, listWorktrees, worktreeBlocker, worktreeLabel, type Worktree } from "./git.ts";
 import { contextText, sameSnapshot, type ContextKind } from "./context.ts";
-import { loadConfig, statePath, type Config, type Profile } from "./config.ts";
+import {
+  loadConfig,
+  statePath,
+  type Config,
+  type Profile,
+  type ReviewTool,
+} from "./config.ts";
 import { saveState, type State } from "./state.ts";
+import { neovimRuntime, palette } from "./theme.ts";
 import {
   createWorkspace,
   createPane,
@@ -51,6 +69,7 @@ import {
   catalogue,
   BUILTIN_CATALOGUE,
   TEMPLATE_ORDER,
+  layoutDigit,
   type Catalogue,
   type Pane,
   type SplitHandle,
@@ -59,10 +78,17 @@ import {
   type Workspace,
 } from "./model.ts";
 
-export type PaneEditor = Pick<
+export type PaneEditor = Partial<Pick<Editor, "selectBuffer" | "closeBuffer">> & {
+  /** False means a preview was skipped; fakes may resolve to nothing. */
+  openFile(
+    path: string,
+    line?: number,
+    column?: number,
+    preview?: boolean,
+  ): Promise<boolean | void>;
+} & Pick<
   Editor,
   | "snapshot"
-  | "openFile"
   | "ready"
   | "modified"
   | "quit"
@@ -106,10 +132,23 @@ type Modal = {
   snapshot?: EditorSnapshot;
   editor?: PaneEditor;
 };
+/** Larger files open only on an explicit Enter. */
+const PREVIEW_MAX_BYTES = 8 * 1024 * 1024;
+/** Longer than a typical key-repeat interval, short enough to feel immediate. */
+const PREVIEW_DEBOUNCE_MS = 90;
+/** A NUL byte in the first block marks a file Neovim would show as noise. */
+async function looksBinary(path: string) {
+  const head = new Uint8Array(await Bun.file(path).slice(0, 8192).arrayBuffer());
+  return head.includes(0);
+}
 export class App {
   state: State;
   input: InputOwner;
   config: Config;
+  /** Resolved chrome colours; follows every config reload. */
+  get colors() {
+    return palette(this.config);
+  }
   private runtimes = new Map<string, Runtime>();
   private bridges = new Map<string, FileBridge>();
   private placeholders = new Map<
@@ -175,6 +214,29 @@ export class App {
   private helperDir = "";
   private yaziDirectories = new Set<string>();
   private yaziConfigs = new Map<string, string>();
+  /** Watchers of each Yazi pane's hover file. */
+  private yaziEvents = new Map<string, FSWatcher>();
+  /** Latest file waiting to be previewed; older hovers are dropped. */
+  private previewTarget?: string;
+  private previewTimer?: ReturnType<typeof setTimeout>;
+  private previewing = false;
+  /** Bumped by every explicit open so an in-flight preview cannot win. */
+  private previewGeneration = 0;
+  private lastPreview?: string;
+  /** Neovim's listed buffers per editor pane, for the tab strip. */
+  private buffers = new Map<string, EditorBuffers>();
+  private tabHits = new Map<string, TabHit[]>();
+  /** The file each editor pane last showed, to follow it once per change. */
+  private followed = new Map<string, string>();
+  /** Dotfiles in Yazi and the file list; starts from Yazi's `show_hidden`. */
+  private showHidden = yaziShowsHidden();
+  /** Git-ignored files in the file list (Yazi has no such filter). */
+  private showIgnored = false;
+  /** Review tool for this session; starts from the `reviewTool` setting. */
+  private reviewOverride?: ReviewTool;
+  private get reviewTool(): ReviewTool {
+    return this.reviewOverride ?? this.config.reviewTool ?? "hunk";
+  }
 
   constructor(
     readonly renderer: CliRenderer,
@@ -197,7 +259,7 @@ export class App {
     this.config = loaded.config;
     this.input = new InputOwner(this.config.prefix);
     this.refreshCatalogue();
-    renderer.setBackgroundColor(this.config.background);
+    renderer.setBackgroundColor(this.colors.background);
     this.message = loaded.warnings.join(" | ") || this.message;
     const w = createWorkspace(cwd, this.config.preset);
     this.state = state ?? { version: 1, workspaces: [w], active: w.id };
@@ -207,21 +269,21 @@ export class App {
       left: 0,
       top: 0,
       height: 1,
-      fg: this.config.accent,
+      fg: this.colors.accent,
     });
     this.footer = new TextRenderable(renderer, {
       id: "footer",
       position: "absolute",
       left: 0,
       height: 1,
-      fg: this.config.foreground,
+      fg: this.colors.foreground,
     });
     this.sidebar = new TextRenderable(renderer, {
       id: "sidebar",
       position: "absolute",
       left: 0,
       top: 1,
-      fg: this.config.foreground,
+      fg: this.colors.foreground,
       onMouseDown: (event) => {
         event.stopPropagation();
         if (this.modal) return;
@@ -244,6 +306,7 @@ export class App {
         this.fileBrowser().move(event.scroll?.direction === "up" ? -1 : 1);
         this.filesFocused = true;
         this.input.mode = "app";
+        this.previewSelected();
         this.draw();
       },
     });
@@ -251,7 +314,7 @@ export class App {
       id: "overlay",
       position: "absolute",
       border: true,
-      backgroundColor: this.config.background,
+      backgroundColor: this.colors.background,
       zIndex: 100,
       visible: false,
       onMouseDown: (event) => {
@@ -294,7 +357,7 @@ export class App {
     this.overlayText = new TextRenderable(renderer, {
       id: "overlay-text",
       wrapMode: "none",
-      fg: this.config.foreground,
+      fg: this.colors.foreground,
     });
     this.overlay.add(this.overlayText);
     this.imageFrame = new BoxRenderable(renderer, {
@@ -302,7 +365,7 @@ export class App {
       position: "absolute",
       border: true,
       overflow: "hidden",
-      backgroundColor: this.config.background,
+      backgroundColor: this.colors.background,
       zIndex: 30,
       visible: false,
       onMouseDown: (event) => {
@@ -316,7 +379,7 @@ export class App {
     });
     this.imageText = new TextRenderable(renderer, {
       id: "image-title",
-      fg: this.config.foreground,
+      fg: this.colors.foreground,
       wrapMode: "none",
     });
     this.imageFrame.add(this.imageText);
@@ -399,8 +462,8 @@ export class App {
         height: 1,
         zIndex: 110,
         content: ` ${label} `,
-        fg: this.config.foreground,
-        bg: "#20202a",
+        fg: this.colors.foreground,
+        bg: this.colors.surface,
         onMouseDown: (event) => {
           event.stopPropagation();
           if (!this.modal || this.modal.kind === "menu") this.openMenu(label);
@@ -445,6 +508,8 @@ export class App {
     let browser = this.browsers.get(workspace.id);
     if (!browser) {
       browser = new FileBrowser(workspace.path);
+      browser.showHidden = this.showHidden;
+      browser.showIgnored = this.showIgnored;
       this.browsers.set(workspace.id, browser);
       if (this.options.files)
         browser.entries = structuredClone(this.options.files);
@@ -460,6 +525,7 @@ export class App {
     const browser = this.fileBrowser();
     const entry = browser.entries[browser.selected];
     if (!entry) return;
+    this.cancelPreview(entry.path);
     if (entry.directory) {
       await browser.load(entry.path);
       this.draw();
@@ -511,6 +577,7 @@ export class App {
       return;
     }
     const editor = this.editor();
+    this.cancelPreview();
     await editor.runtime.editor!.openFile(link.path, link.line, link.column);
     this.closeImage(editor.pane.id);
     await this.revealInYazi(link.path);
@@ -522,15 +589,226 @@ export class App {
     this.input.mode = "terminal";
     this.report(`Opened ${displayName(basename(link.path))}`);
   }
-  private async revealInYazi(path: string) {
+  private async revealInYazi(path: string, skipFocused = false) {
     for (const pane of this.tab().panes) {
       const directory = this.yaziConfigs.get(pane.id);
       const host = this.runtimes.get(pane.id)?.host;
       if (pane.kind !== "yazi" || !directory || host?.phase !== "running")
         continue;
+      // The user is driving this Yazi; moving its cursor would fight them.
+      if (skipFocused && this.tab().focused === pane.id) continue;
       await Bun.write(join(directory, REVEAL_FILE), path);
       host.write(new TextEncoder().encode(REVEAL_KEY_BYTES));
     }
+  }
+  /** Record Neovim's buffers for the tab strip and follow its current file. */
+  applyBuffers(paneId: string, state: EditorBuffers) {
+    // A notification can arrive after the pane was stopped.
+    if (this.disposed || !this.runtimes.has(paneId)) return;
+    this.buffers.set(paneId, state);
+    const current = state.buffers.find((b) => b.id === state.current)?.name;
+    // Neovim moved to another file (a tab, :e, a jump): hovering the last
+    // preview again must reload it.
+    if (current !== this.lastPreview) this.lastPreview = undefined;
+    if (current && current !== this.followed.get(paneId)) {
+      this.followed.set(paneId, current);
+      if (this.config.followActiveFile)
+        void this.followFile(paneId, current).catch(() => {});
+    }
+    this.draw();
+  }
+  /** Show the editor's file in the files panel of the same tab, as Fresh's
+   * `follow_active_buffer`, unless the user is using that panel right now. */
+  private async followFile(paneId: string, path: string) {
+    const w = this.workspace();
+    if (!this.tab().panes.some((p) => p.id === paneId)) return;
+    const within = relative(w.path, path);
+    if (!within || within === ".." || within.startsWith("../") || isAbsolute(within))
+      return;
+    await this.revealInYazi(path, true);
+    if (!this.filesFocused && this.browsers.has(w.id) && !this.options.files) {
+      await this.fileBrowser().reveal(path);
+      this.draw();
+    }
+  }
+  /** Click on an editor tab: select it, or close it on its × (or middle click). */
+  private clickEditorTab(pane: Pane, column: number, button: number) {
+    const hit = this.tabHits
+      .get(pane.id)
+      ?.find((h) => column >= h.start && column < h.end);
+    const editor = this.runtimes.get(pane.id)?.editor;
+    if (!hit || !editor) return false;
+    if (hit.close || button === 1) {
+      if (!editor.closeBuffer) return true;
+      this.run(() => editor.closeBuffer!(hit.id));
+      return true;
+    }
+    if (editor.selectBuffer) this.run(() => editor.selectBuffer!(hit.id));
+    this.closeImage(pane.id);
+    this.tab().focused = pane.id;
+    this.filesFocused = false;
+    this.input.mode = "terminal";
+    this.draw();
+    return true;
+  }
+  /** Dotfiles follow one switch in Yazi and the fallback list. */
+  private setHidden(show: boolean) {
+    this.showHidden = show;
+    const key = show ? HIDDEN_KEYS.show : HIDDEN_KEYS.hide;
+    for (const w of this.state.workspaces)
+      for (const t of w.tabs)
+        for (const pane of t.panes) {
+          const host = this.runtimes.get(pane.id)?.host;
+          const overlay = this.yaziConfigs.get(pane.id);
+          if (
+            pane.kind === "yazi" &&
+            host?.phase === "running" &&
+            overlay &&
+            installedBindings(overlay).includes(key.on)
+          )
+            host.write(new TextEncoder().encode(key.bytes));
+        }
+    return this.reloadBrowsers(show ? "Showing hidden files" : "Hiding hidden files");
+  }
+  private setIgnored(show: boolean) {
+    this.showIgnored = show;
+    const yazi = this.tab().panes.some(
+      (p) => p.kind === "yazi" && this.runtimes.get(p.id)?.host.phase === "running",
+    );
+    return this.reloadBrowsers(
+      `${show ? "Showing" : "Hiding"} gitignored files${yazi ? " in the file list (Yazi has no gitignore filter)" : ""}`,
+    );
+  }
+  private async reloadBrowsers(message: string) {
+    for (const browser of this.browsers.values()) {
+      browser.showHidden = this.showHidden;
+      browser.showIgnored = this.showIgnored;
+      if (!this.options.files) await browser.load();
+    }
+    this.report(message);
+  }
+  /** Watch the file the overlay's init.lua hook rewrites with the hovered
+   * path. Returns that path, or nothing when it cannot be watched. */
+  private watchYaziHover(paneId: string, directory: string) {
+    const file = join(directory, HOVER_FILE);
+    try {
+      writeFileSync(file, "", { mode: 0o600 });
+      this.yaziEvents.get(paneId)?.close();
+      const watcher = watch(directory, (_event, name) => {
+        // Some platforms omit the name; then just read the file again.
+        if (name && name !== HOVER_FILE) return;
+        let path = "";
+        try {
+          path = readFileSync(file, "utf8").trim();
+        } catch {
+          return;
+        }
+        // The hook truncates before it writes; an empty read is mid-write.
+        if (path) this.onYaziHover(paneId, path);
+      });
+      watcher.on("error", () => {
+        watcher.close();
+        if (this.yaziEvents.get(paneId) === watcher) this.yaziEvents.delete(paneId);
+      });
+      this.yaziEvents.set(paneId, watcher);
+      return file;
+    } catch {
+      return;
+    }
+  }
+  /** Hovers count only while the user drives a focused Yazi; those from
+   * startup, reveal or renders of an unfocused Yazi are ignored. Focusing Yazi
+   * previews the file under its cursor, as clicking into Fresh's tree does. */
+  private onYaziHover(paneId: string, path: string) {
+    if (
+      this.disposed ||
+      this.modal ||
+      this.filesFocused ||
+      this.input.mode !== "terminal" ||
+      this.tab().focused !== paneId
+    )
+      return;
+    this.queuePreview(path);
+  }
+  private previewSelected() {
+    const browser = this.fileBrowser();
+    const entry = browser.entries[browser.selected];
+    if (entry && !entry.directory) this.queuePreview(entry.path);
+    else this.cancelPreview();
+  }
+  /** Debounce previews so holding an arrow key only loads where it stops. */
+  private queuePreview(path: string) {
+    if (!this.config.previewOnHover) return;
+    // Yazi repeats hover on every render; a repeat must not restart the wait.
+    if (path === this.previewTarget) return;
+    if (path === this.lastPreview && !this.previewTarget) return;
+    this.previewTarget = path;
+    clearTimeout(this.previewTimer);
+    this.previewTimer = setTimeout(() => void this.flushPreview(), PREVIEW_DEBOUNCE_MS);
+  }
+  /** An explicit open wins over a preview still waiting for its debounce. */
+  private cancelPreview(path?: string) {
+    clearTimeout(this.previewTimer);
+    this.previewTarget = undefined;
+    this.previewGeneration++;
+    // Whatever Neovim shows next, hovering the old preview must load it again.
+    this.lastPreview = path;
+  }
+  private async flushPreview() {
+    if (this.previewing) return;
+    this.previewing = true;
+    try {
+      while (this.previewTarget && !this.disposed) {
+        const path = this.previewTarget;
+        this.previewTarget = undefined;
+        try {
+          await this.previewFile(path);
+        } catch (e) {
+          // Yazi repeats the hover; do not retry and re-report the same failure.
+          this.lastPreview = path;
+          this.report(`Preview: ${String(e)}`);
+        }
+      }
+    } finally {
+      this.previewing = false;
+    }
+  }
+  /** Show a file in this tab's Neovim without moving focus. Text files open as
+   * an ephemeral buffer (see Editor.openFile); images use the image viewer. */
+  private async previewFile(path: string) {
+    if (path === this.lastPreview) return;
+    const generation = this.previewGeneration;
+    const info = await stat(path).catch(() => undefined);
+    if (!info?.isFile()) return;
+    const w = this.workspace();
+    const pane = this.tab().panes.find((p) => p.kind === "nvim");
+    const runtime = pane && this.runtimes.get(pane.id);
+    const editor = runtime?.editor;
+    if (!pane || !editor || runtime.host.phase !== "running") return;
+    const name = displayName(basename(path));
+    if (generation !== this.previewGeneration) return;
+    if (this.openImage(path, w, false)) {
+      this.lastPreview = path;
+      return;
+    }
+    if (info.size > PREVIEW_MAX_BYTES) {
+      this.lastPreview = path;
+      this.report(`${name} is too large to preview · Enter opens it`);
+      return;
+    }
+    if (await looksBinary(path)) {
+      this.lastPreview = path;
+      this.report(`${name} looks binary · not previewed`);
+      return;
+    }
+    if (generation !== this.previewGeneration) return;
+    const opened = await editor.openFile(path, 1, 0, true);
+    if (generation !== this.previewGeneration) return;
+    // No normal window could take it; leave the next hover free to retry.
+    if (opened === false) return;
+    this.lastPreview = path;
+    this.closeImage(pane.id);
+    this.report(`Preview ${name} · Enter keeps it open`);
   }
   private async openYazi() {
     const pane = this.tab().panes.find((p) => p.kind === "yazi");
@@ -549,17 +827,31 @@ export class App {
       from?: string;
       to?: string;
       cwd?: string;
+      tool?: ReviewTool;
     } = {},
   ) {
-    const profile = options.staged ? "hunk-staged" : "hunk";
-    const command = this.config.profiles[profile];
-    if (
-      !command ||
-      !(
-        this.options.available?.(command.argv[0]!) ??
-        !!Bun.which(command.argv[0]!)
-      )
-    )
+    const available = (name: string) => {
+      const command = this.config.profiles[name];
+      return (
+        !!command &&
+        (this.options.available?.(command.argv[0]!) ??
+          !!Bun.which(command.argv[0]!))
+      );
+    };
+    let tool = options.tool ?? this.reviewTool;
+    let note = "";
+    // reviewr has no staged scope and diffs against one base, not a range.
+    if (tool === "reviewr" && (options.staged || options.to)) {
+      tool = "hunk";
+      note = `reviewr cannot show ${options.staged ? "staged changes" : "a revision range"}; using Hunk`;
+    }
+    if (tool === "reviewr" && !available("reviewr"))
+      throw new Error(
+        "Install herdr-reviewr (herdr plugin install persiyanov/herdr-reviewr) or configure the reviewr profile",
+      );
+    const profile =
+      tool === "reviewr" ? "reviewr" : options.staged ? "hunk-staged" : "hunk";
+    if (tool === "hunk" && !available(profile))
       throw new Error("Install Hunk or configure its profile to view diffs");
     const workspace = this.workspace();
     // A review may target another directory, such as a worktree that lives
@@ -574,10 +866,15 @@ export class App {
     const inside = await new Response(git.stdout).text();
     if ((await git.exited) !== 0 || inside.trim() !== "true")
       throw new Error(`Diff review requires a Git working tree: ${cwd}`);
-    const args = [
-      ...(options.from ? [options.from] : []),
-      ...(options.to ? [options.to] : []),
-    ];
+    const args =
+      tool === "reviewr"
+        ? options.from
+          ? ["--base", options.from]
+          : []
+        : [
+            ...(options.from ? [options.from] : []),
+            ...(options.to ? [options.to] : []),
+          ];
     const key = args.join("\u0000");
     const matches = (pane: Pane) =>
       pane.kind === "hunk" &&
@@ -587,11 +884,13 @@ export class App {
     let tab = workspace.tabs.find((t) => t.panes.some(matches));
     if (!tab) {
       tab = preset("review", "codex", this.catalogue);
-      tab.name = options.staged
-        ? "staged diff"
-        : options.from
-          ? `diff ${options.from}${options.to ? `..${options.to}` : ""}`
-          : "working diff";
+      tab.name =
+        (tool === "reviewr" ? "reviewr · " : "") +
+        (options.staged
+          ? "staged diff"
+          : options.from
+            ? `diff ${options.from}${options.to ? `..${options.to}` : ""}`
+            : "working diff");
       const pane = tab.panes[0]!;
       pane.profile = profile;
       pane.cwd = cwd;
@@ -606,6 +905,11 @@ export class App {
     const runtime = this.runtimes.get(pane.id);
     if (runtime && runtime.host.phase !== "running") await this.stop(pane);
     if (!this.runtimes.has(pane.id)) await this.start(pane);
+    if (note) this.message = note;
+    else if (tool === "reviewr")
+      this.message = options.from
+        ? `reviewr · press b for the branch scope against ${options.from} · y copies comments`
+        : "reviewr · y copies comments for the agent · e opens the line in Neovim";
     this.draw();
   }
   async startInitial() {
@@ -645,6 +949,7 @@ export class App {
     await b.start({
       open: async (path, line, column) => {
         if (this.shuttingDown) throw new Error("Under is shutting down");
+        this.cancelPreview(path);
         if (this.openImage(path, w)) return;
         const e = this.editor(w);
         await e.runtime.editor!.openFile(path, line, column);
@@ -750,10 +1055,16 @@ export class App {
         tool: join(this.helperDir, "under"),
         env: profile.env,
         version: yaziVersion(profile.argv[0]!),
+        // A Yazi started later matches the session's hidden-files choice.
+        showHidden: this.showHidden,
       });
       this.yaziDirectories.add(directory);
       this.yaziConfigs.set(pane.id, directory);
       command.env = { ...command.env, YAZI_CONFIG_HOME: directory };
+      if (config.previewOnHover) {
+        const file = this.watchYaziHover(pane.id, directory);
+        if (file) command.env = { ...command.env, [HOVER_ENV]: file };
+      }
     }
     if (pane.kind === "task" && config.tasks[pane.profile]?.shell)
       command = {
@@ -774,6 +1085,17 @@ export class App {
     if (editor) {
       try {
         await editor.ready();
+        await editor
+          .useRuntime(
+            neovimRuntime(),
+            config.editorTheme && config.theme === "flat" ? "under-flat" : undefined,
+          )
+          .catch((e) => warnings.push(`Neovim theme: ${String(e)}`));
+        await editor
+          .watchBuffers((state) => this.applyBuffers(pane.id, state))
+          .catch((e) => warnings.push(`Editor tabs: ${String(e)}`));
+        if (config.editorTheme && config.theme !== "flat")
+          warnings.push(`editorTheme has no Neovim scheme for theme ${config.theme}`);
       } catch (e) {
         await editor.dispose();
         this.runtimes.delete(pane.id);
@@ -789,7 +1111,7 @@ export class App {
       id: `frame-${pane.id}`,
       position: "absolute",
       border: true,
-      borderColor: this.config.accent,
+      borderColor: this.colors.accent,
       flexDirection: "column",
       overflow: "hidden",
       // A boundary drag can hand pointer capture to a pane instead of the
@@ -805,7 +1127,13 @@ export class App {
       id: `title-${pane.id}`,
       height: 1,
       flexShrink: 0,
-      fg: this.config.accent,
+      wrapMode: "none",
+      fg: this.colors.accent,
+      onMouseDown: (event) => {
+        if (this.modal || pane.kind !== "nvim") return;
+        if (this.clickEditorTab(pane, event.x - title.x, event.button))
+          event.stopPropagation();
+      },
     });
     const view = new EmbeddedTerminalRenderable(this.renderer, {
       id: pane.id,
@@ -866,6 +1194,12 @@ export class App {
     if (r.editor && r.host.phase === "running") await r.editor.quit();
     r.editor ? await r.editor.dispose() : await r.host.close();
     this.runtimes.delete(pane.id);
+    // Only after Yazi has exited: its hook writes hover events until then.
+    this.yaziEvents.get(pane.id)?.close();
+    this.yaziEvents.delete(pane.id);
+    this.buffers.delete(pane.id);
+    this.tabHits.delete(pane.id);
+    this.followed.delete(pane.id);
     r.frame.destroyRecursively();
     this.draw();
   }
@@ -917,6 +1251,7 @@ export class App {
       cmd("Open file in Neovim", () =>
         this.ask("File path", async (text) => {
           const editor = this.editor();
+          this.cancelPreview();
           await editor.runtime.editor!.openFile(
             resolve(this.workspace().path, text),
           );
@@ -939,6 +1274,19 @@ export class App {
       cmd("Review this directory", () => this.reviewHere(false)),
       cmd("Review staged here", () => this.reviewHere(true)),
       cmd("Review against revision…", () => this.askReview()),
+      cmd("Working tree diff in reviewr", () =>
+        this.openReview({ tool: "reviewr" }),
+      ),
+      cmd("Working tree diff in Hunk", () => this.openReview({ tool: "hunk" })),
+      ...(["hunk", "reviewr"] as const).map((tool) => ({
+        ...cmd(`Review tool: ${tool === "hunk" ? "Hunk" : "reviewr"}`, () => {
+          this.reviewOverride = tool;
+          this.report(
+            `Review actions now open ${tool === "hunk" ? "Hunk" : "reviewr"} (this session; set "reviewTool" to keep it)`,
+          );
+        }),
+        checked: this.reviewTool === tool,
+      })),
       cmd("Redraw terminals", () => repaint(this.renderer)),
       cmd("Add Hunk live review", () => this.add("hunk")),
       cmd("Add Hunk staged review", () => this.add("hunk", "hunk-staged")),
@@ -946,7 +1294,8 @@ export class App {
       cmd("Split below with shell", () => this.add("shell", "shell", "column")),
       ...Object.keys(this.config.profiles)
         .filter(
-          (k) => !["nvim", "yazi", "hunk", "hunk-staged", "shell"].includes(k),
+          (k) =>
+            !["nvim", "yazi", "hunk", "hunk-staged", "reviewr", "shell"].includes(k),
         )
         .map((k) => cmd(`Start agent: ${k}`, () => this.startAgent(k))),
       ...Object.keys(this.config.tasks).map((k) =>
@@ -958,7 +1307,7 @@ export class App {
       ...this.catalogue.order.map((name, index) => {
         const key =
           index < TEMPLATE_ORDER.length
-            ? String(index + 1)
+            ? layoutDigit(index)
             : (this.catalogue.templates[name]?.key ?? "");
         return cmd(`Layout: ${name} (${key || "menu"})`, () =>
           this.applyLayout(name),
@@ -1058,6 +1407,23 @@ export class App {
         this.draw();
       }),
       cmd("Refresh files", () => this.refreshFiles()),
+      cmd(this.showHidden ? "Hide hidden files" : "Show hidden files", () =>
+        this.setHidden(!this.showHidden),
+      ),
+      cmd(
+        this.showIgnored ? "Hide gitignored files" : "Show gitignored files",
+        () => this.setIgnored(!this.showIgnored),
+      ),
+      cmd("Close editor tab", async () => {
+        const e = this.editor();
+        const state = this.buffers.get(e.pane.id);
+        if (
+          !state?.buffers.some((b) => b.id === state.current) ||
+          !e.runtime.editor!.closeBuffer
+        )
+          throw new Error("The current buffer is not an editor tab");
+        await e.runtime.editor!.closeBuffer(state.current);
+      }),
       cmd("Focus files", () => this.focusFiles()),
       cmd("Toggle chat", () => {
         this.chatHidden = !this.chatHidden;
@@ -1198,7 +1564,7 @@ export class App {
     this.openModal({
       kind: "help",
       title: "Under shortcuts",
-      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nCtrl+Left/Right: previous/next pane (no prefix)\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\no: quick open  g: go to workspace or tab\nTab/j/k: cycle panes  1-9: layouts\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
+      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nCtrl+Left/Right: previous/next pane (no prefix)\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\no: quick open  g: go to workspace or tab\nTab/j/k: cycle panes  0-9: layouts\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
       index: 0,
       cancelMode: "app",
     });
@@ -1308,7 +1674,11 @@ export class App {
     });
   }
   /** Images bypass the editor, including when no Neovim pane is running. */
-  private openImage(path: string, workspace = this.workspace()): boolean {
+  private openImage(
+    path: string,
+    workspace = this.workspace(),
+    focus = true,
+  ): boolean {
     if (
       ![
         ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
@@ -1331,11 +1701,13 @@ export class App {
       status: "Loading…",
       zoom: 1, panX: 0, panY: 0, annotate: false, boxes: [],
     };
-    this.state.active = workspace.id;
-    workspace.activeTab = tab.id;
-    tab.focused = pane.id;
-    this.filesFocused = false;
-    if (!this.modal) this.input.mode = "terminal";
+    if (focus) {
+      this.state.active = workspace.id;
+      workspace.activeTab = tab.id;
+      tab.focused = pane.id;
+      this.filesFocused = false;
+      if (!this.modal) this.input.mode = "terminal";
+    }
     this.imageView.source = path;
     this.draw();
     return true;
@@ -1714,8 +2086,14 @@ export class App {
         this.filesFocused &&
         !["tab", "m", "p", "f", "b"].includes(key.name)
       ) {
-        if (["j", "down"].includes(key.name)) this.fileBrowser().move(1);
-        if (["k", "up"].includes(key.name)) this.fileBrowser().move(-1);
+        if (["j", "down"].includes(key.name)) {
+          this.fileBrowser().move(1);
+          this.previewSelected();
+        }
+        if (["k", "up"].includes(key.name)) {
+          this.fileBrowser().move(-1);
+          this.previewSelected();
+        }
         if (["enter", "return", "right"].includes(key.name))
           this.run(() => this.openSelectedFile());
         if (key.name === "r") this.run(() => this.refreshFiles());
@@ -1763,7 +2141,7 @@ export class App {
       } else if (key.name === "[")
         t.layout = resize(t.layout, t.focused, -0.05);
       else if (key.name === "]") t.layout = resize(t.layout, t.focused, 0.05);
-      else if (/^[1-9]$/.test(key.name) || this.layoutKeys.has(key.name))
+      else if (/^[0-9]$/.test(key.name) || this.layoutKeys.has(key.name))
         this.applyLayout(this.layoutKeys.get(key.name));
       else if (key.name === "q") this.run(() => this.shutdown(), true);
       else if (key.name === "?" || key.name === "h") this.help();
@@ -1791,7 +2169,7 @@ export class App {
     this.layoutKeys = new Map<string, string>();
     this.catalogue.order.forEach((name, index) => {
       if (index < TEMPLATE_ORDER.length)
-        this.layoutKeys.set(String(index + 1), name);
+        this.layoutKeys.set(layoutDigit(index), name);
       const key = this.catalogue.templates[name]?.key;
       if (key) this.layoutKeys.set(key, name);
     });
@@ -1867,6 +2245,7 @@ export class App {
       return;
     }
     const editor = this.editor();
+    this.cancelPreview();
     await editor.runtime.editor!.openFile(resolve(this.workspace().path, path));
     this.closeImage(editor.pane.id);
     this.rememberRecent(path);
@@ -2068,11 +2447,19 @@ export class App {
       button.left = slot.x;
       button.top = slot.y;
       button.width = slot.width;
-      button.fg =
-        this.modal?.menu === slot.label
-          ? this.config.accent
-          : this.config.foreground;
+      const open = this.modal?.menu === slot.label;
+      button.fg = open ? this.colors.accent : this.colors.foreground;
+      button.bg = open ? this.colors.selection : this.colors.surface;
     }
+    const colors = this.colors;
+    this.renderer.setBackgroundColor(colors.background);
+    this.header.bg = colors.surface;
+    this.footer.bg = colors.surface;
+    this.footer.fg = colors.foreground;
+    this.sidebar.bg = colors.panel;
+    this.overlay.backgroundColor = colors.panel;
+    this.overlay.borderColor = colors.border;
+    this.overlayText.bg = colors.panel;
     const top = navbar.height + 1;
     const nativeFiles = t.panes.find(
       (p) =>
@@ -2095,8 +2482,8 @@ export class App {
     const fileRows = Math.max(1, this.sidebar.height - 4);
     const fileStart = Math.max(0, browser.selected - fileRows + 1);
     this.sidebar.fg = this.filesFocused
-      ? this.config.accent
-      : this.config.foreground;
+      ? this.colors.accent
+      : this.colors.foreground;
     this.sidebar.content =
       ` Files · ${this.filesFocused ? "FOCUS" : "Ctrl-G f"}\n ${displayName(basename(browser.directory))}/\n` +
       (browser.loading
@@ -2129,7 +2516,7 @@ export class App {
     const hint = navigating
       ? width < 80
         ? "Esc: back · m: menu · h: help | "
-        : "Esc: back · m: menu · h: help · 1-9: layouts · Tab: panes | "
+        : "Esc: back · m: menu · h: help · 0-9: layouts · Tab: panes | "
       : width < 80
         ? "Ctrl-G f: files · Tab: panes | "
         : "";
@@ -2183,7 +2570,7 @@ export class App {
           id: `placeholder-${id}`,
           position: "absolute",
           border: true,
-          borderColor: this.config.accent,
+          borderColor: this.colors.accent,
           onMouseDrag: (event) => {
             event.stopPropagation();
             this.applyDrag(event);
@@ -2193,7 +2580,7 @@ export class App {
         });
         const text = new TextRenderable(this.renderer, {
           id: `placeholder-text-${id}`,
-          fg: this.config.foreground,
+          fg: this.colors.foreground,
         });
         frame.add(text);
         this.renderer.root.add(frame);
@@ -2201,6 +2588,7 @@ export class App {
         this.placeholders.set(id, placeholder);
       }
       placeholder.frame.visible = this.imagePreview?.pane !== id;
+      placeholder.frame.borderColor = id === t.focused ? colors.accent : colors.border;
       placeholder.frame.left = cell.x;
       placeholder.frame.top = cell.y;
       placeholder.frame.width = cell.width;
@@ -2232,10 +2620,26 @@ export class App {
       r.frame.top = cell.y;
       r.frame.width = cell.width;
       r.frame.height = cell.height;
-      r.frame.borderColor = id === t.focused ? this.config.accent : "#3a3a44";
+      r.frame.borderColor = id === t.focused ? colors.accent : colors.border;
+      r.title.fg = id === t.focused ? colors.accent : colors.muted;
       const pane = t.panes.find((p) => p.id === id)!;
       const target = pane.args?.length ? ` ${pane.args.join(" ")}` : "";
-      r.title.content = `${pane.profile}${target} [${r.host.phase}${r.host.exitCode !== null ? `:${r.host.exitCode}` : ""}]`;
+      const state = this.buffers.get(id);
+      if (
+        pane.kind === "nvim" &&
+        this.config.editorTabs &&
+        state?.buffers.length &&
+        r.host.phase === "running"
+      ) {
+        const strip = bufferStrip(state, Math.max(1, cell.width - 2), colors);
+        r.title.content = strip.text;
+        r.title.bg = colors.surface;
+        this.tabHits.set(id, strip.hits);
+      } else {
+        r.title.content = `${pane.profile}${target} [${r.host.phase}${r.host.exitCode !== null ? `:${r.host.exitCode}` : ""}]`;
+        r.title.bg = "transparent";
+        this.tabHits.delete(id);
+      }
       if (
         id === t.focused &&
         this.input.mode === "terminal" &&
@@ -2257,7 +2661,7 @@ export class App {
       this.imageFrame.top = imageCell.y;
       this.imageFrame.width = imageCell.width;
       this.imageFrame.height = imageCell.height;
-      this.imageFrame.borderColor = this.imageFocused() ? this.config.accent : "#3a3a44";
+      this.imageFrame.borderColor = this.imageFocused() ? this.colors.accent : this.colors.border;
       const width = Math.max(1, imageCell.width - 2);
       const height = Math.max(1, imageCell.height - 5);
       this.imageViewport.width = width;
@@ -2318,9 +2722,9 @@ export class App {
       box.height = row ? Math.max(1, handle.span.end - handle.span.start - 2) : 2;
       box.backgroundColor =
         this.drag?.key === handle.path.join(".")
-          ? this.config.accent
+          ? this.colors.accent
           : this.hoverSplit === index
-            ? "#3a3a44"
+            ? this.colors.border
             : undefined;
     }
     for (const box of this.splitters.slice(this.handles.length))
@@ -2397,9 +2801,12 @@ export class App {
       for (const b of this.bridges.values()) await b.close();
       if (this.helperDir)
         await rm(this.helperDir, { recursive: true, force: true });
+      for (const watcher of this.yaziEvents.values()) watcher.close();
+      this.yaziEvents.clear();
       for (const directory of this.yaziDirectories)
         await rm(directory, { recursive: true, force: true });
       this.yaziDirectories.clear();
+      clearTimeout(this.previewTimer);
       this.disposeUI();
       if (errors.length)
         throw new AggregateError(errors, "Process cleanup failed");
