@@ -6,6 +6,7 @@ import {
   symlink,
   rm,
 } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
@@ -39,6 +40,33 @@ export function yaziVersion(binary: string): string {
   }
 }
 
+/** Environment variable naming the file Under's hover hook writes. */
+export const HOVER_ENV = "UNDER_HOVER_FILE";
+/** Name of the hover file inside the overlay. */
+export const HOVER_FILE = "under-hover.txt";
+
+/** Prepended to the user's init.lua in Under's overlay (a trailing top-level
+ * `return` in the user's file would make appended code a syntax error). When `UNDER_HOVER_FILE`
+ * is set, it writes the hovered path to that file each time it changes. It only
+ * subscribes to an event, so Yazi's stdout and the programs it starts are left
+ * alone, and a Yazi without the `ps` API simply skips it. */
+export const HOVER_HOOK = `
+-- Added by Under: report the hovered file for previews.
+pcall(function()
+  local out = os.getenv("${HOVER_ENV}")
+  if not out or out == "" then return end
+  local last
+  ps.sub("hover", function()
+    local h = cx.active.current.hovered
+    local url = h and tostring(h.url) or ""
+    if url == last then return end
+    last = url
+    local f = io.open(out, "w")
+    if f then f:write(url) f:close() end
+  end)
+end)
+`;
+
 /** Review bindings Under adds to Yazi, on keys the default keymap leaves free. */
 export const REVIEW_BINDINGS = [
   { on: "R", args: "", desc: "Review this directory in Under Hunk" },
@@ -53,20 +81,30 @@ export const REVEAL_KEY = "<C-S-F12>";
 export const REVEAL_KEY_BYTES = "\x1b[24;6~";
 export const REVEAL_FILE = "reveal.txt";
 
+/** Keys Under sends to Yazi to show or hide dotfiles explicitly, so its state
+ * cannot drift from Under's the way `hidden toggle` could. */
+export const HIDDEN_KEYS = {
+  show: { on: "<C-S-F11>", bytes: "\x1b[23;6~" },
+  hide: { on: "<C-S-F10>", bytes: "\x1b[21;6~" },
+} as const;
+
 const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
 
-/** Preserve native configuration with an IDE sidebar layout, editor bridge and
- * review bindings that report the directory Yazi is currently showing. */
-export async function yaziConfig(options: {
-  editor: string;
-  /** Under CLI helper used by the review bindings. */
-  tool?: string;
-  env?: Record<string, string>;
-  version?: string;
-}) {
-  const { editor, tool, env = {}, version = "" } = options;
-  const source = resolve(
+const BINDINGS_FILE = "under-bindings.json";
+/** Keys Under bound in an overlay; a key the user already owns is not sent. */
+export function installedBindings(overlay: string): string[] {
+  try {
+    const value = JSON.parse(readFileSync(join(overlay, BINDINGS_FILE), "utf8"));
+    return Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The user's Yazi configuration directory. */
+export function yaziSource(env: Record<string, string> = {}) {
+  return resolve(
     env.YAZI_CONFIG_HOME ||
       process.env.YAZI_CONFIG_HOME ||
       join(
@@ -76,6 +114,34 @@ export async function yaziConfig(options: {
         "yazi",
       ),
   );
+}
+
+/** Whether the user's Yazi starts with dotfiles shown (`show_hidden`). */
+export function yaziShowsHidden(env: Record<string, string> = {}): boolean {
+  try {
+    const config = parse(
+      readFileSync(join(yaziSource(env), "yazi.toml"), "utf8"),
+    );
+    const manager = config.mgr ?? config.manager;
+    return record(manager) && manager.show_hidden === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Preserve native configuration with an IDE sidebar layout, editor bridge and
+ * review bindings that report the directory Yazi is currently showing. */
+export async function yaziConfig(options: {
+  editor: string;
+  /** Under CLI helper used by the review bindings. */
+  tool?: string;
+  env?: Record<string, string>;
+  version?: string;
+  /** Start with dotfiles shown or hidden, overriding `show_hidden`. */
+  showHidden?: boolean;
+}) {
+  const { editor, tool, env = {}, version = "", showHidden } = options;
+  const source = yaziSource(env);
   const directory = await mkdtemp(join(tmpdir(), "under-yazi-"));
   try {
     let entries: string[] = [];
@@ -85,9 +151,23 @@ export async function yaziConfig(options: {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     }
     for (const name of entries.filter(
-      (name) => !["yazi.toml", "keymap.toml"].includes(name),
+      // Files Under writes are never links into the user's configuration.
+      (name) =>
+        ![
+          "yazi.toml",
+          "keymap.toml",
+          "init.lua",
+          REVEAL_FILE,
+          HOVER_FILE,
+          BINDINGS_FILE,
+        ].includes(name),
     ))
       await symlink(join(source, name), join(directory, name));
+    // Run the hover hook first, then the user's init.lua unchanged.
+    const init = entries.includes("init.lua")
+      ? await readFile(join(source, "init.lua"), "utf8")
+      : "";
+    await writeFile(join(directory, "init.lua"), `${HOVER_HOOK}\n${init}`);
     const config = entries.includes("yazi.toml")
       ? parse(await readFile(join(source, "yazi.toml"), "utf8"))
       : {};
@@ -105,6 +185,7 @@ export async function yaziConfig(options: {
     config[managerKey] = {
       ...(manager as Record<string, any>),
       ratio: [0, 1, 0],
+      ...(showHidden === undefined ? {} : { show_hidden: showHidden }),
     };
     const opener = config.opener;
     if (
@@ -169,6 +250,17 @@ export async function yaziConfig(options: {
         run: `shell --orphan '${ya} emit reveal "$(cat ${join(directory, REVEAL_FILE)})"'`,
         desc: "Reveal the file Under asks for",
       });
+    for (const [mode, key] of Object.entries(HIDDEN_KEYS))
+      if (!taken.has(key.on))
+        bindings.push({
+          on: key.on,
+          run: `hidden ${mode}`,
+          desc: `${mode === "show" ? "Show" : "Hide"} hidden files (Under)`,
+        });
+    await writeFile(
+      join(directory, BINDINGS_FILE),
+      JSON.stringify(bindings.map((binding) => binding.on)),
+    );
     if (entries.includes("keymap.toml") || bindings.length) {
       if (bindings.length)
         mgr.prepend_keymap = [

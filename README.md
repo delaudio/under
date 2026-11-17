@@ -53,9 +53,38 @@ plugins and key bindings are retained. Its normal edit opener opens the file in
 Under's existing Neovim. Yazi shows only the current directory, without parent or
 preview columns. Use its native right/l and left/h keys to enter and leave
 directories; this is directory navigation, not an expandable tree.
+Moving Yazi's cursor onto a file **previews** it in Neovim while focus stays in
+Yazi, as Fresh's file explorer does: scan a directory with j/k, the arrows or a
+mouse click. A preview buffer is ephemeral — the next preview replaces it, so
+buffers do not pile up. Editing it, or opening it with Enter (or a double
+click), keeps it as a normal buffer and focuses Neovim. Buffers you already had
+open, modified buffers and buffers shown in another window are never closed by
+a preview. Images use the image viewer; binary files and files over 8 MB are not
+previewed. Moving quickly only loads the file the cursor stops on. Previews use
+a small hook placed before your `init.lua` in Under's temporary copy of it and can be
+turned off with `"previewOnHover": false`.
+Open files appear as **tabs** above Neovim, as in Fresh. Click a tab to show
+that file (a preview tab, in italics, then stays open); click its **×**, or
+middle-click the tab, to close it. A modified file shows **●** instead and is
+not closed until you save or discard it. Closing a tab never closes a Neovim
+window: windows showing it switch to the previous file. **Close editor tab** in
+the palette closes the current one. Turn the strip off with `"editorTabs": false`.
+
+The files panel **follows the active file**: whenever Neovim switches file —
+a tab, `:e`, a jump to a definition — Yazi (or the file list) moves its cursor
+to that file, opening its directory. It leaves the panel alone while you are
+using it and ignores files outside the workspace. Turn it off with
+`"followActiveFile": false`.
+
+**Show/Hide hidden files** in the palette switches dotfiles in Yazi and the file
+list together; it starts from your Yazi `show_hidden` setting. **Show/Hide
+gitignored files** applies to the fallback file list, which hides ignored files
+by default; Yazi has no gitignore filter, so it keeps showing them. Both toggles
+last for the session.
 If Yazi is missing or stopped, a basic file list provides
-arrows/j/k, Enter to open, left for parent, and r to refresh; that fallback omits
-`.git`, `.under` and `node_modules`.
+arrows/j/k (with the same previews), Enter to open, left for parent, and r to refresh; that fallback always omits
+`.git`, `.under` and `node_modules`, and by default dotfiles (unless Yazi's `show_hidden` is on) and
+gitignored files (see the toggles above).
 
 PNG, JPEG, WebP and GIF files opened from Yazi, the fallback file list, Quick
 Open or terminal path links appear in the Neovim pane, keeping the other panes available.
@@ -124,7 +153,7 @@ destination never restarts or reloads a tool.
 | z                   | Toggle focused-pane zoom                                 |
 | [ / ]               | Shrink / grow focused split                              |
 | drag a pane border  | Resize that split with the mouse                        |
-| 1–9                 | Apply a layout template (see Layouts)                   |
+| 0–9                 | Apply a layout template (see Layouts)                   |
 | b                   | Toggle workspace sidebar                                 |
 | ? / h               | Shortcut help                                            |
 | q                   | Save layout and quit after checking unsaved buffers      |
@@ -153,8 +182,9 @@ new tabs from the File menu (**New &lt;name&gt; tab**).
 | 5 | `files-review` | files \| hunk \| chat |
 | 6 | `editor-chat` | editor \| chat |
 | 7 | `editor` | editor only |
-| 8 | `run` | shell only |
+| 8 | `run` | terminal only |
 | 9 | `editor-chat-stack` | editor above chat |
+| 0 | `chat-shell` | chat above a free terminal |
 
 Applying a template only **shows, hides and arranges** panes. Nothing is stopped,
 restarted or reloaded, so a running chat keeps its thread and Neovim keeps its
@@ -229,6 +259,25 @@ kept. Hunk's editor action uses the same bridge, including the selected line.
 Deleted files remain governed by Hunk's normal behavior. No global editor
 configuration is changed.
 
+### Choosing the review tool
+
+Review actions use **Hunk** by default. They can use
+[herdr-reviewr](https://github.com/persiyanov/herdr-reviewr) instead, run as a
+plain terminal app (`herdr plugin install persiyanov/herdr-reviewr` puts
+`herdr-reviewr` on your PATH). Set `"reviewTool": "reviewr"` to make it the
+default, or pick **Review tool: Hunk / reviewr** in the Review menu for the
+session; **Working tree diff in reviewr** and **… in Hunk** open either one
+directly.
+
+reviewr shows the working tree against `HEAD` and lets you comment on lines.
+**Review against revision…** passes the revision as its `--base` (press `b` for
+its branch scope). It has no staged scope and diffs against one base, so staged
+reviews and `from..to` ranges still open in Hunk, with a note in the status line.
+Its **Send** needs herdr itself, so inside Under press `y` to copy your comments
+and paste them into the agent; `e` opens the line in Under's Neovim. When Under
+runs inside herdr, Under hides herdr's pane identity from reviewr so it never
+sends to a pane outside Under.
+
 ### Worktrees
 
 **Open a worktree…** lists the current repository's checkouts — the primary one,
@@ -275,9 +324,12 @@ arguments and environment.
 {
   "prefix": "ctrl+g",
   "preset": "code",
-  "background": "#101014",
-  "foreground": "#dddde5",
-  "accent": "#b7a7e8",
+  "theme": "flat",
+  "editorTheme": false,
+  "previewOnHover": true,
+  "followActiveFile": true,
+  "editorTabs": true,
+  "reviewTool": "hunk",
   "profiles": {
     "nvim": { "argv": ["nvim"] },
     "codex": { "argv": ["codex"] },
@@ -291,6 +343,15 @@ arguments and environment.
   }
 }
 ```
+
+`theme` picks Under's own colours: `flat` (default; dark panels told apart by
+shade, warm yellow focus, modelled on the flat theme of
+[Fresh](https://github.com/sinelaw/fresh)) or `classic` (the earlier violet
+accent). `background`, `foreground` and `accent` (`#RRGGBB`) override single
+colours of the theme. Embedded tools keep their own colours. Set
+`"editorTheme": true` to also switch Neovim to the matching `under-flat`
+colour scheme after your configuration loads; otherwise it is only made
+available, and `:colorscheme under-flat` applies it by hand.
 
 Tasks and agent profiles start only on an explicit action. Inspect project
 configuration before starting its commands. A project override of the Neovim

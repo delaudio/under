@@ -9,15 +9,31 @@ import {
   type Template,
   type TemplateSlot,
 } from "./model.ts";
+import { THEMES, type ThemeName } from "./theme.ts";
 
+export const REVIEW_TOOLS = ["hunk", "reviewr"] as const;
+export type ReviewTool = (typeof REVIEW_TOOLS)[number];
 export type Profile = { argv: string[]; env?: Record<string, string> };
 export type Task = Profile & { shell?: boolean };
 export type Config = {
   prefix: string;
   preset: string;
-  background: string;
-  foreground: string;
-  accent: string;
+  /** Under's own chrome palette; see theme.ts. */
+  theme: ThemeName;
+  /** Explicit colour overrides on top of the theme. */
+  background?: string;
+  foreground?: string;
+  accent?: string;
+  /** Apply the theme's Neovim colour scheme after the user's config loads. */
+  editorTheme: boolean;
+  /** Moving the file cursor shows the file in Neovim, like Fresh's preview tabs. */
+  previewOnHover: boolean;
+  /** Select the file Neovim is showing in Yazi or the file list. */
+  followActiveFile: boolean;
+  /** Show Neovim's open files as clickable tabs above the editor. */
+  editorTabs: boolean;
+  /** Tool for Review actions: Hunk, or herdr-reviewr run standalone. */
+  reviewTool: ReviewTool;
   profiles: Record<string, Profile>;
   tasks: Record<string, Task>;
   templates: Record<string, Template>;
@@ -25,14 +41,23 @@ export type Config = {
 export const defaults: Config = {
   prefix: "ctrl+g",
   preset: "code",
-  background: "#101014",
-  foreground: "#dddde5",
-  accent: "#b7a7e8",
+  theme: "flat",
+  editorTheme: false,
+  previewOnHover: true,
+  followActiveFile: true,
+  editorTabs: true,
+  reviewTool: "hunk",
   profiles: {
     nvim: { argv: ["nvim"] },
     yazi: { argv: ["yazi"] },
     hunk: { argv: ["hunk", "diff", "--watch"] },
     "hunk-staged": { argv: ["hunk", "diff", "--staged", "--watch"] },
+    // Run outside herdr: blank herdr's pane identity so a Under started inside
+    // herdr never has reviewr send comments to a herdr pane.
+    reviewr: {
+      argv: ["herdr-reviewr"],
+      env: { HERDR_PANE_ID: "", HERDR_WORKSPACE_ID: "", HERDR_TAB_ID: "" },
+    },
     codex: { argv: ["codex"] },
     claude: { argv: ["claude"] },
     opencode: { argv: ["opencode"] },
@@ -157,6 +182,22 @@ export function validatePatch(value: unknown): Partial<Config> {
         }
       }
       (patch as Record<string, unknown>).templates = templates;
+    } else if (key === "theme") {
+      if (typeof v !== "string" || !THEMES.includes(v as ThemeName))
+        throw new Error(`theme must be one of ${THEMES.join(", ")}`);
+      patch.theme = v as ThemeName;
+    } else if (
+      key === "editorTheme" ||
+      key === "previewOnHover" ||
+      key === "followActiveFile" ||
+      key === "editorTabs"
+    ) {
+      if (typeof v !== "boolean") throw new Error(`${key} must be true or false`);
+      patch[key] = v;
+    } else if (key === "reviewTool") {
+      if (typeof v !== "string" || !REVIEW_TOOLS.includes(v as ReviewTool))
+        throw new Error(`reviewTool must be one of ${REVIEW_TOOLS.join(", ")}`);
+      patch.reviewTool = v as ReviewTool;
     } else if (["background", "foreground", "accent"].includes(key)) {
       if (typeof v !== "string" || !/^#[0-9a-f]{6}$/i.test(v))
         throw new Error(`${key} must be #RRGGBB`);

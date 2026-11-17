@@ -4,6 +4,7 @@ import { App, type PaneEditor, type PaneHost } from "../src/app.ts";
 import { defaults } from "../src/config.ts";
 import {
   applyTemplate,
+  layoutDigit,
   paneOrder,
   preset,
   TEMPLATE_ORDER,
@@ -236,6 +237,37 @@ test("a template needing an absent kind shows a stopped placeholder", async () =
       setup.renderer.root.findDescendantById(`frame-${hunk.id}`),
     ).toBeFalsy();
     expect(setup.captureCharFrame()).toContain("hunk");
+  } finally {
+    app.disposeUI();
+    await setup.dispose();
+  }
+});
+
+test("Ctrl-G 0 shows the chat above a free terminal, reusing the running agent", async () => {
+  expect(layoutDigit(9)).toBe("0");
+  const setup = await createTestRenderer({ width: 120, height: 30 });
+  const app = new App(setup.renderer, "/projects/under", undefined, {
+    config: defaults,
+    files: [],
+  });
+  try {
+    applyTemplate(app.tab(), "chat");
+    const agent = app.tab().panes.find((p) => p.kind === "agent")!;
+    app.attachTerminal(agent, running());
+    setup.mockInput.pressKey("g", { ctrl: true });
+    setup.mockInput.pressKey("0");
+    await setup.flush();
+    const tab = app.tab();
+    expect(tab.template).toBe("chat-shell");
+    const shell = tab.panes.find((p) => p.kind === "shell")!;
+    expect(leaves(tab.layout)).toEqual([agent.id, shell.id]);
+    expect(tab.focused).toBe(agent.id);
+    expect((tab.layout as Extract<Layout, { axis: string }>).axis).toBe("column");
+    // Navigation stays active: terminal only, then back. Same panes, nothing restarted.
+    setup.mockInput.pressKey("8");
+    expect(leaves(app.tab().layout)).toEqual([shell.id]);
+    setup.mockInput.pressKey("0");
+    expect(leaves(app.tab().layout)).toEqual([agent.id, shell.id]);
   } finally {
     app.disposeUI();
     await setup.dispose();

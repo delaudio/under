@@ -79,6 +79,64 @@ but that package uses a different OpenTUI version from Under. The first release
 therefore embeds its supported standalone CLI and avoids coupling native runtime
 versions. Native component composition remains an optional future integration.
 
+### Hover previews
+
+The overlay's `init.lua` is a small hook followed by the user's own file
+(prepended, so a trailing top-level `return` stays valid). When
+`UNDER_HOVER_FILE` is set, the hook subscribes to Yazi's `hover` event and rewrites that
+file with the hovered path whenever it changes. Under sets the variable only for
+its Yazi panes and watches the overlay directory. The hook only subscribes to an
+event, so Yazi's stdout — and the programs Yazi starts, which inherit it — stay
+untouched (an earlier `--local-events` stdout redirection would have captured
+their output). Hovers are acted on only while that Yazi pane has focus in
+terminal mode; repeats of the pending or last path are dropped before the 90 ms
+debounce, so only the stop position loads. An explicit open cancels a pending
+preview and, through a generation counter, one already in flight. Preview loads
+suppress the swap-file prompt (`shortmess+=A`), which would otherwise block
+Neovim while focus is elsewhere, and never replace a floating, special-buftype or
+`winfixbuf` window nor leave it: the file loads into another normal window of the
+tab page through `nvim_win_call`, or the preview is skipped. Buffers already
+loaded by LSP or plugins count as the user's and are never deleted. Previews never move Under's focus.
+
+`Editor.openFile(..., preview)` marks a buffer it had to create with
+`b:under_preview` and remembers it in `g:under_preview_buf`; the next preview
+deletes it only if it is still flagged, unmodified and not shown in another
+window. `BufModifiedSet`/`InsertEnter` and any normal open clear the flag. Opened
+buffers are listed, as with `:edit`.
+
+### Editor tabs and following the active file
+
+After start-up `Editor.watchBuffers` installs `UnderBuffers` autocommands
+(`BufEnter`, `BufAdd`, `BufDelete`, `BufWipeout`, `BufModifiedSet`,
+`BufFilePost`) that coalesce through `vim.schedule` and `rpcnotify` the listed
+file buffers, the current one and their preview flags; `Rpc` now dispatches
+notifications. `src/tabs.ts` lays them out in the pane's title row with
+`StyledText`, returning column hit ranges for tab bodies and close glyphs.
+Closing switches every window showing the buffer to the alternate (or another
+listed, or a new empty) buffer before `nvim_buf_delete`, and refuses modified
+buffers. It uses `:bdelete`, so marks and undo survive a reopen. Selecting a tab
+clears its preview flag.
+
+The same notification drives following: when the current file changes and lies
+inside the workspace, Under reveals it in each Yazi pane of the tab that does not
+have focus (the existing reveal key) and in the fallback list unless it has
+focus. Hover previews therefore never move the Yazi cursor under the user.
+
+Hidden files use two reserved Yazi keys bound to `hidden show` / `hidden hide`
+(explicit states, so Under and Yazi cannot drift as with `hidden toggle`). The
+overlay records which keys it bound in `under-bindings.json`; a key the user
+already owns is never sent. The
+fallback list filters dotfiles and asks `git check-ignore --stdin` for ignored
+names, treating any Git failure as "nothing ignored".
+
+## Themes
+
+`src/theme.ts` resolves a palette (`flat` or `classic`) plus explicit colour
+overrides; the App reads it through a getter so configuration reloads apply on
+the next frame. `runtime/nvim` is appended to Neovim's `runtimepath` after
+start-up, providing `colors/under-flat.lua`; it is applied only with
+`editorTheme`, after the user's configuration.
+
 ## Persistence and deferred features
 
 Only versioned metadata is persisted, using a private temporary file and atomic
