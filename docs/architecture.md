@@ -24,6 +24,7 @@ download or package name is advertised.
 | `app.ts`                 | Terminal views, command routing and UI lifecycle          |
 | `bridge.ts`              | Private per-workspace socket for opening editor locations |
 | `context.ts` / `git.ts`  | Explicit live-buffer and disk-diff context                |
+| `changes.ts`             | `git status` rows, stage/unstage/discard, Changes panel   |
 | `config.ts` / `state.ts` | Validated settings and metadata persistence               |
 | `main.ts`                | CLI parsing and runtime startup                           |
 
@@ -128,6 +129,51 @@ overlay records which keys it bound in `under-bindings.json`; a key the user
 already owns is never sent. The
 fallback list filters dotfiles and asks `git check-ignore --stdin` for ignored
 names, treating any Git failure as "nothing ignored".
+
+## Source control
+
+`src/changes.ts` parses `git status --porcelain=v1 -z --untracked-files=all
+--no-renames` (a staged rename shows as a deletion plus an addition)
+into VS Code's two groups (a file with index and working-tree changes appears in
+both) and runs stage, unstage and discard with `--literal-pathspecs`, so names
+with glob characters are taken literally; before the first commit unstaging
+uses `git rm --cached`. `diffSides` reads Git's side with `git cat-file blob`
+(index for a working-tree row, `HEAD` and index for a staged row), refusing
+binary and very large files, submodules and nested repositories. Git prints a
+resolved root; it is re-expressed through the workspace path so paths match the
+buffers Under opened (`/var` vs `/private/var` on macOS).
+
+The side panel has two modes. A template's `sidebar` picks the mode and a
+palette choice overrides it for the tab until another template is applied;
+Yazi replaces only the file list, never the Changes list. Selection changes
+debounce like hover previews and a generation counter drops stale diffs.
+
+`Editor.openDiff` uses Neovim's own diff mode in a dedicated tab page
+(`g:under_diff_tab`): the right side is the real buffer (so editing, saving and
+LSP work), the left a read-only `under-diff://` scratch buffer with
+`bufhidden=wipe`, each labelled through `winbar`. Reusing the tab page first
+parks a placeholder in its only window so the previous scratch buffers wipe
+themselves; a wipe by hand ends diff mode on the other side unless a newer diff
+(`g:under_diff_gen`) replaced it. `openFile` and `selectBuffer` close the diff
+tab page first when it is current, so normal navigation never lands inside it.
+
+The unified layout keeps one window on the real buffer and draws the diff as
+extmarks in the `under_unified` namespace: `line_hl_group=DiffAdd` on new lines
+and `virt_lines` (`DiffDelete`) for removed ones, from `vim.text.diff` with
+`result_type='indices'` against Git's text. `TextChanged`/`TextChangedI`
+re-render after a short delay. Because the overlay sits on a buffer the user
+keeps, `UnderClearUnified` removes the namespace, autocommands and the
+buffer-local `]c`/`[c` maps it added (never ones the user already had) whenever
+the diff changes, the tab page closes or `closeDiff` runs.
+
+Image changes skip Neovim: `imageSides` reads Git's version as bytes
+(`git cat-file blob`, up to 32 MB) and the image viewer gains a compare mode. A
+second `ImageRenderable` in its own clipped viewport shows Git's side in the
+left half while the existing one shows the file (or index bytes) on the right;
+both share one zoom and pan, clamped to the larger image. Annotation and copy
+keys stay with the single-image viewer. `ChangesList.load` resolves an
+overtaken load with the newest one, so callers never act on a list that is
+still empty.
 
 ## Themes
 

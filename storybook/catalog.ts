@@ -209,6 +209,13 @@ export const catalog = [
   },
   { id: "tpl-run", export: "TemplateRun", width: 120, height: 30, state: "tpl-run" },
   {
+    id: "tpl-changes",
+    export: "TemplateChanges",
+    width: 150,
+    height: 30,
+    state: "tpl-changes",
+  },
+  {
     id: "tpl-editor-chat-stack",
     export: "TemplateEditorChatStack",
     width: 120,

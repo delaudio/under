@@ -18,6 +18,10 @@ export type Palette = {
   /** Selected row in lists and the active menu. */
   selection: string;
   directory: string;
+  /** Change markers in the Changes list: added, deleted, modified. */
+  added: string;
+  removed: string;
+  changed: string;
 };
 
 export const THEMES = ["flat", "classic"] as const;
@@ -36,6 +40,9 @@ export const PALETTES: Record<ThemeName, Palette> = {
     muted: "#606574",
     selection: "#3a4f78",
     directory: "#8faadc",
+    added: "#a3ce8c",
+    removed: "#e06c75",
+    changed: "#e5c07b",
   },
   classic: {
     background: "#101014",
@@ -47,6 +54,9 @@ export const PALETTES: Record<ThemeName, Palette> = {
     muted: "#8a8a96",
     selection: "#2c2c3a",
     directory: "#b7a7e8",
+    added: "#8fbf7f",
+    removed: "#e07a7a",
+    changed: "#d8b86a",
   },
 };
 

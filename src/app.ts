@@ -29,7 +29,20 @@ import { pathCandidates, resolvePathLink } from "./pathlink.ts";
 import { imagePoint, boxBounds, moveBox, exportAnnotatedImage, copyImageToClipboard, type ImageBox, type ImagePoint } from "./image-annotations.ts";
 import { repaint } from "./repaint.ts";
 import { terminalResponse } from "./terminal.ts";
-import { FileBrowser, displayName, type FileEntry } from "./files.ts";
+import { FileBrowser, displayName, isImagePath, type FileEntry } from "./files.ts";
+import {
+  ChangesList,
+  type Change,
+  changesView,
+  diffSides,
+  discard,
+  imageSides,
+  type ImageSide,
+  stage,
+  stageAll,
+  unstage,
+  unstageAll,
+} from "./changes.ts";
 import { MENU_LABELS, menuSlots, wrapText, type MenuLabel } from "./menu.ts";
 import { fuzzyScore, listFiles, rank } from "./search.ts";
 import { chmod } from "node:fs/promises";
@@ -49,6 +62,7 @@ import {
   type Config,
   type Profile,
   type ReviewTool,
+  type DiffLayout,
 } from "./config.ts";
 import { saveState, type State } from "./state.ts";
 import { neovimRuntime, palette } from "./theme.ts";
@@ -72,13 +86,19 @@ import {
   layoutDigit,
   type Catalogue,
   type Pane,
+  type SidebarMode,
   type SplitHandle,
   type SplitPath,
   type Tab,
   type Workspace,
 } from "./model.ts";
 
-export type PaneEditor = Partial<Pick<Editor, "selectBuffer" | "closeBuffer">> & {
+export type PaneEditor = Partial<
+  Pick<
+    Editor,
+    "selectBuffer" | "closeBuffer" | "openDiff" | "closeDiff" | "diffOpen" | "reload"
+  >
+> & {
   /** False means a preview was skipped; fakes may resolve to nothing. */
   openFile(
     path: string,
@@ -168,11 +188,34 @@ export class App {
   private annotationDraft?: ImageBox;
   private annotationMove?: { index: number; original: ImageBox; start: ImagePoint };
   private annotationViews: BoxRenderable[] = [];
-  private imagePreview?: { pane: string; title: string; status: string; zoom: number; panX: number; panY: number; annotate: boolean; boxes: ImageBox[] };
+  private imagePreview?: {
+    pane: string; title: string; status: string; zoom: number; panX: number; panY: number; annotate: boolean; boxes: ImageBox[];
+    /** Present for an image diff: the left (Git) side shown beside the file. */
+    compare?: { key: string; left: string; right: string; leftStatus: string; rightStatus: string };
+  };
+  /** The Git side of an image diff, in its own clipped viewport. */
+  private imageBase: ImageRenderable;
+  private imageBaseViewport: BoxRenderable;
   private modal?: Modal;
   private side = true;
   private filesFocused = false;
   private browsers = new Map<string, FileBrowser>();
+  /** Changes lists by workspace id. */
+  private changeLists = new Map<string, ChangesList>();
+  /** Side panel mode chosen from the palette, by tab id; wins over the
+   * template's until another template is applied. */
+  private sideOverride = new Map<string, SidebarMode>();
+  /** Panel line → the Changes row drawn there, matched again on click since a
+   * reload may have moved it. */
+  private changeRows = new Map<number, Change>();
+  private diffTimer?: ReturnType<typeof setTimeout>;
+  private diffGeneration = 0;
+  /** Change whose diff Neovim shows, so moving back onto it does not reload. */
+  private diffShown?: string;
+  private changesPoll?: ReturnType<typeof setInterval>;
+  private changesReload?: ReturnType<typeof setTimeout>;
+  private changesLoading = false;
+  private changesAgain = false;
   private menuButtons: TextRenderable[] = [];
   private menuStart = 0;
   private handles: SplitHandle[] = [];
@@ -234,6 +277,11 @@ export class App {
   private showIgnored = false;
   /** Review tool for this session; starts from the `reviewTool` setting. */
   private reviewOverride?: ReviewTool;
+  /** Diff layout chosen for this session; starts from `diffLayout`. */
+  private diffLayoutOverride?: DiffLayout;
+  private get diffLayout(): DiffLayout {
+    return this.diffLayoutOverride ?? this.config.diffLayout ?? "split";
+  }
   private get reviewTool(): ReviewTool {
     return this.reviewOverride ?? this.config.reviewTool ?? "hunk";
   }
@@ -249,6 +297,8 @@ export class App {
       quickFiles?: string[];
       /** Deterministic worktree list for previews. */
       worktrees?: Worktree[];
+      /** Deterministic Changes list for previews; no Git runs and no diff opens. */
+      changes?: Change[];
       available?: (command: string) => boolean;
       copyImage?: typeof copyImageToClipboard;
     } = {},
@@ -290,6 +340,11 @@ export class App {
         this.filesFocused = true;
         this.side = true;
         this.input.mode = "app";
+        if (this.sideMode() === "changes") {
+          this.clickChanges(event.y - this.sidebar.y, event.x - this.sidebar.x);
+          this.draw();
+          return;
+        }
         const browser = this.fileBrowser();
         const rows = Math.max(1, this.sidebar.height - 4);
         const start = Math.max(0, browser.selected - rows + 1);
@@ -303,9 +358,16 @@ export class App {
       onMouseScroll: (event) => {
         event.stopPropagation();
         if (this.modal) return;
-        this.fileBrowser().move(event.scroll?.direction === "up" ? -1 : 1);
+        const step = event.scroll?.direction === "up" ? -1 : 1;
         this.filesFocused = true;
         this.input.mode = "app";
+        if (this.sideMode() === "changes") {
+          this.changesList().move(step);
+          this.queueDiff();
+          this.draw();
+          return;
+        }
+        this.fileBrowser().move(step);
         this.previewSelected();
         this.draw();
       },
@@ -441,17 +503,69 @@ export class App {
       visible: false,
       onLoad: (image) => {
         if (!this.imagePreview) return;
-        this.imagePreview.status = `${image.width} × ${image.height}`;
+        const size = `${image.width} × ${image.height}`;
+        if (this.imagePreview.compare) this.imagePreview.compare.rightStatus = size;
+        else this.imagePreview.status = size;
         this.draw();
       },
       onError: () => {
         if (!this.imagePreview) return;
-        this.imagePreview.status =
-          "Cannot display this image (unreadable or unsupported file)."
+        if (this.imagePreview.compare)
+          this.imagePreview.compare.rightStatus = "cannot display";
+        else
+          this.imagePreview.status =
+            "Cannot display this image (unreadable or unsupported file).";
         this.draw();
       },
     });
     this.imageViewport.add(this.imageView);
+    this.imageBaseViewport = new BoxRenderable(renderer, {
+      id: "image-base-viewport",
+      position: "absolute",
+      left: 0,
+      top: 3,
+      overflow: "hidden",
+      visible: false,
+      // Both sides pan and zoom together.
+      onMouseDown: (event) => {
+        if (this.modal || !this.imagePreview || event.button !== 0) return;
+        this.imageDrag = { x: event.x, y: event.y };
+      },
+      onMouseDrag: (event) => {
+        if (this.modal || !this.imagePreview || !this.imageDrag) return;
+        event.stopPropagation();
+        this.panImage(event.x - this.imageDrag.x, event.y - this.imageDrag.y);
+        this.imageDrag = { x: event.x, y: event.y };
+      },
+      onMouseUp: () => this.finishAnnotation(),
+      onMouseDragEnd: () => this.finishAnnotation(),
+      onMouseScroll: (event) => {
+        if (this.modal || !this.imagePreview) return;
+        event.stopPropagation();
+        if (event.scroll?.direction === "up") this.zoomImage(1.25);
+        if (event.scroll?.direction === "down") this.zoomImage(1 / 1.25);
+      },
+    });
+    this.imageBase = new ImageRenderable(renderer, {
+      id: "image-base",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      fit: "fit",
+      protocol: "auto",
+      onLoad: (image) => {
+        if (!this.imagePreview?.compare) return;
+        this.imagePreview.compare.leftStatus = `${image.width} × ${image.height}`;
+        this.draw();
+      },
+      onError: () => {
+        if (!this.imagePreview?.compare) return;
+        this.imagePreview.compare.leftStatus = "cannot display";
+        this.draw();
+      },
+    });
+    this.imageBaseViewport.add(this.imageBase);
+    this.imageFrame.add(this.imageBaseViewport);
     renderer.root.add(this.imageFrame);
     for (const v of [this.header, this.footer, this.sidebar, this.overlay])
       renderer.root.add(v);
@@ -545,6 +659,10 @@ export class App {
   }
   private focusFiles() {
     this.side = true;
+    if (this.sideMode() === "changes") {
+      this.showChanges();
+      return;
+    }
     const pane = this.tab().panes.find(
       (p) =>
         p.kind === "yazi" && this.runtimes.get(p.id)?.host.phase === "running",
@@ -605,7 +723,14 @@ export class App {
   applyBuffers(paneId: string, state: EditorBuffers) {
     // A notification can arrive after the pane was stopped.
     if (this.disposed || !this.runtimes.has(paneId)) return;
+    const before = this.buffers.get(paneId);
     this.buffers.set(paneId, state);
+    // Saving (or first modifying) a buffer can change what Git reports;
+    // switching buffers cannot.
+    const dirty = (s?: EditorBuffers) =>
+      JSON.stringify(s?.buffers.map((b) => [b.id, b.modified]) ?? []);
+    if (this.sideMode() === "changes" && dirty(before) !== dirty(state))
+      this.queueChangesReload();
     const current = state.buffers.find((b) => b.id === state.current)?.name;
     // Neovim moved to another file (a tab, :e, a jump): hovering the last
     // preview again must reload it.
@@ -631,6 +756,305 @@ export class App {
       this.draw();
     }
   }
+  /** What the side panel lists in the active tab: files, or Git changes. */
+  private sideMode(): SidebarMode {
+    const t = this.tab();
+    return (
+      this.sideOverride.get(t.id) ??
+      (t.template ? this.catalogue.templates[t.template]?.sidebar : undefined) ??
+      "files"
+    );
+  }
+  changesList(): ChangesList {
+    const w = this.workspace();
+    let list = this.changeLists.get(w.id);
+    if (!list) {
+      list = new ChangesList(w.path, this.options.changes);
+      this.changeLists.set(w.id, list);
+    }
+    return list;
+  }
+  /** Switch the side panel of this tab between files and changes. */
+  setSideMode(mode: SidebarMode) {
+    this.sideOverride.set(this.tab().id, mode);
+    if (mode === "changes") this.showChanges();
+    else this.draw();
+  }
+  /** Bring the Changes list forward, reload it and show the selection's diff. */
+  private showChanges(focus = true) {
+    this.side = true;
+    if (focus) {
+      this.filesFocused = true;
+      this.input.mode = "app";
+    }
+    this.watchChanges();
+    void this.changesList()
+      .load()
+      .then(() => {
+        this.draw();
+        this.queueDiff(0);
+      });
+    this.draw();
+  }
+  /** Agents and other tools change files without telling Under; a cheap
+   * `git status` while the Changes list is visible keeps it current. */
+  private watchChanges() {
+    if (this.changesPoll || this.disposed) return;
+    this.changesPoll = setInterval(() => {
+      if (this.disposed || this.shuttingDown) return;
+      if (this.sideMode() === "changes" && this.side) this.queueChangesReload(0);
+    }, 2000);
+    this.changesPoll.unref?.();
+    this.queueChangesReload(0);
+  }
+  /** Coalesce reloads of the Changes list; redraws only when it changed. */
+  private queueChangesReload(delay = 250) {
+    if (this.disposed) return;
+    clearTimeout(this.changesReload);
+    this.changesReload = setTimeout(() => {
+      if (this.disposed) return;
+      // A slow repository must not stack `git status` processes; a request
+      // made meanwhile runs once the current load ends.
+      if (this.changesLoading) {
+        this.changesAgain = true;
+        return;
+      }
+      this.changesLoading = true;
+      void this.changesList()
+        .load()
+        .then((changed) => {
+          if (changed) this.draw();
+        })
+        .finally(() => {
+          this.changesLoading = false;
+          if (this.changesAgain) {
+            this.changesAgain = false;
+            this.queueChangesReload(0);
+          }
+        });
+    }, delay);
+  }
+  /** Take the shown diff (text or image) off screen. */
+  private async clearDiff() {
+    this.diffShown = undefined;
+    const pane = this.tab().panes.find((p) => p.kind === "nvim");
+    if (!pane) return;
+    this.closeImage(pane.id);
+    await this.runtimes.get(pane.id)?.editor?.closeDiff?.();
+  }
+  /** Show the selected change's diff after the selection settles. */
+  private queueDiff(delay = PREVIEW_DEBOUNCE_MS) {
+    if (this.options.changes || this.disposed) return;
+    clearTimeout(this.diffTimer);
+    const generation = ++this.diffGeneration;
+    this.diffTimer = setTimeout(() => {
+      this.showDiff(false, generation).catch((e) => {
+        // Never leave another file's diff on screen beside this row.
+        void this.clearDiff().catch(() => {});
+        this.report(String(e));
+      });
+    }, delay);
+  }
+  /**
+   * Open the selected change in Neovim's side-by-side diff: Git's version on the
+   * left, the real file on the right. `focus` moves the keyboard to the editor.
+   */
+  async showDiff(focus = false, generation = ++this.diffGeneration) {
+    // Loads finishing after the UI closed must not start Neovim, and a
+    // selection made before leaving the Changes view must not open a diff.
+    if (this.disposed || this.shuttingDown) return;
+    if (!focus && this.sideMode() !== "changes") return;
+    const list = this.changesList();
+    const change = list.current();
+    if (!change || !list.root) return;
+    const pane = this.tab().panes.find((p) => p.kind === "nvim");
+    if (!pane) {
+      // Moving through the list is passive; only an explicit open complains.
+      if (!focus) return;
+      throw new Error("Add a Neovim pane to this tab to see diffs");
+    }
+    // Each tab can have its own Neovim, so the pane is part of the key.
+    const layout = this.diffLayout;
+    const key = JSON.stringify([pane.id, list.root, change, layout]);
+    // Skip a repeat only while Neovim still shows that diff: the user may have
+    // closed its tab page or restarted the editor.
+    if (!focus && key === this.diffShown) {
+      if (this.imagePreview?.compare?.key === key) return;
+      // A closed image comparison is reopened, never mistaken for a text diff.
+      if (isImagePath(change.path)) this.diffShown = undefined;
+      const shown = isImagePath(change.path) ? undefined : this.runtimes.get(pane.id)?.editor;
+      if (shown?.diffOpen && (await shown.diffOpen().catch(() => false))) return;
+    }
+    // Images are compared in Under's viewer, which needs no running editor.
+    if (isImagePath(change.path)) {
+      const sides = await imageSides(list.root, change);
+      if (generation !== this.diffGeneration || this.disposed) return;
+      this.openImageDiff(pane, basename(change.path), key, sides, focus);
+      this.diffShown = key;
+      return;
+    }
+    if (!this.runtimes.has(pane.id))
+      await (this.starts.get(pane.id) ?? this.start(pane));
+    if (generation !== this.diffGeneration) return;
+    const editor = this.runtimes.get(pane.id)?.editor;
+    if (!editor?.openDiff) throw new Error("This editor pane cannot show diffs");
+    const sides = await diffSides(list.root, change);
+    if (generation !== this.diffGeneration) return;
+    await editor.openDiff(sides.left, sides.right, layout);
+    this.diffShown = key;
+    this.closeImage(pane.id);
+    if (focus && this.tab().panes.some((p) => p.id === pane.id)) {
+      this.tab().focused = pane.id;
+      this.filesFocused = false;
+      this.input.mode = "terminal";
+    }
+    this.draw();
+  }
+  /** Switch between side-by-side and unified diffs and redraw the open one. */
+  setDiffLayout(layout: DiffLayout) {
+    this.diffLayoutOverride = layout;
+    this.report(
+      `Diffs are now ${layout === "split" ? "side by side" : "unified"} (this session; set "diffLayout" to keep it)`,
+    );
+    // Only the Changes view knows which row to redraw.
+    if (this.sideMode() === "changes") {
+      this.diffShown = undefined;
+      this.queueDiff(0);
+    }
+  }
+  /** Stage a change from Changes, or unstage one from Staged. */
+  private async toggleStage(
+    change = this.changesList().current(),
+    confirmed = false,
+  ) {
+    const list = this.changesList();
+    const root = list.root;
+    if (!change || !root) return;
+    // Staging a conflicted file marks it resolved, as `git add` does.
+    if (change.status === "!" && !confirmed) {
+      this.ask(
+        `Mark ${displayName(basename(change.path))} as resolved? Enter: stage · Esc: cancel`,
+        () => this.toggleStage(change, true),
+      );
+      return;
+    }
+    // Like VS Code, stay in the group the row left: its next row, else the
+    // row that moved. Measured before Git runs, as a poll may reload meanwhile.
+    const position = list.entries.findIndex(
+      (e) => e.path === change.path && e.staged === change.staged,
+    ) - list.entries.findIndex((e) => e.staged === change.staged);
+    if (change.staged) await unstage(root, change);
+    else await stage(root, change);
+    await list.load();
+    const group = list.entries.filter((e) => e.staged === change.staged);
+    const next = group[Math.min(position, group.length - 1)];
+    list.selected = Math.max(
+      0,
+      next
+        ? list.entries.indexOf(next)
+        : list.entries.findIndex(
+            (e) => e.path === change.path && e.staged !== change.staged,
+          ),
+    );
+    this.diffShown = undefined;
+    this.report(`${change.staged ? "Unstaged" : "Staged"} ${displayName(basename(change.path))}`);
+    this.queueDiff(0);
+  }
+  private async allStaged(staged: boolean, confirmed = false) {
+    const list = this.changesList();
+    await list.load();
+    if (!list.root) throw new Error(list.error || "Not a Git working tree");
+    // `git add -A` marks conflicted files resolved, so ask as for one file.
+    const conflicts = list.entries.filter((e) => e.status === "!").length;
+    if (staged && conflicts && !confirmed) {
+      this.ask(
+        `Stage all and mark ${conflicts} conflicted file${conflicts === 1 ? "" : "s"} as resolved? Enter: stage · Esc: cancel`,
+        () => this.allStaged(true, true),
+      );
+      return;
+    }
+    if (staged) await stageAll(list.root);
+    else await unstageAll(list.root);
+    await list.load();
+    this.diffShown = undefined;
+    this.report(staged ? "Staged all changes" : "Unstaged all changes");
+    if (this.sideMode() === "changes") this.queueDiff(0);
+  }
+  /** Ask, then drop the selected working-tree change (VS Code's Discard). */
+  private askDiscard() {
+    const list = this.changesList();
+    const change = list.current();
+    const root = list.root;
+    if (!change || !root) return;
+    if (change.staged)
+      throw new Error("Unstage the change before discarding it");
+    if (change.status === "!")
+      throw new Error("Resolve the conflict in the editor instead");
+    if (change.status === "A")
+      throw new Error("Unstage the intent-to-add entry before discarding it");
+    const name = displayName(basename(change.path));
+    const path = join(root, change.path);
+    const untracked = change.status === "U";
+    this.ask(
+      `${untracked ? `Delete untracked ${name}` : `Discard changes to ${name}`}? Enter: confirm · Esc: cancel`,
+      async () => {
+        const editors = [...this.runtimes.values()].flatMap((r) =>
+          r.editor && r.host.phase === "running" ? [r.editor] : [],
+        );
+        for (const editor of editors)
+          if ((await editor.modified()).includes(path))
+            throw new Error(`Save or undo the editor's changes to ${name} first`);
+        await discard(root, change);
+        for (const editor of editors) await editor.reload?.(path);
+        await list.load();
+        this.diffShown = undefined;
+        this.report(`${untracked ? "Deleted" : "Discarded changes to"} ${name}`);
+        this.queueDiff(0);
+      },
+    );
+  }
+  /** Click in the Changes list: select and diff a row, or stage it on its glyph. */
+  private clickChanges(line: number, column: number) {
+    const drawn = this.changeRows.get(line);
+    const list = this.changesList();
+    const index = drawn
+      ? list.entries.findIndex(
+          (e) => e.path === drawn.path && e.staged === drawn.staged,
+        )
+      : -1;
+    if (index < 0) return;
+    if (column >= this.sidebar.width - 2) {
+      this.run(() => this.toggleStage(list.entries[index]));
+      return;
+    }
+    list.selected = index;
+    this.queueDiff(0);
+  }
+  /** Keys of the focused Changes list; false leaves the key to navigation, so
+   * layouts, quick open, help and quit keep working from the list. */
+  private changesKey(name: string): boolean {
+    const list = this.changesList();
+    if (["j", "down"].includes(name)) {
+      list.move(1);
+      this.queueDiff();
+    } else if (["k", "up"].includes(name)) {
+      list.move(-1);
+      this.queueDiff();
+    } else if (["enter", "return", "right"].includes(name))
+      this.run(() => this.showDiff(true));
+    else if (["s", "space"].includes(name)) this.run(() => this.toggleStage());
+    else if (name === "x") this.run(() => this.askDiscard());
+    else if (name === "v")
+      this.setDiffLayout(this.diffLayout === "split" ? "unified" : "split");
+    else if (name === "r")
+      this.run(async () => {
+        await list.load();
+        this.diffShown = undefined;
+        this.queueDiff(0);
+      });
+    else return false;
+    return true;
+  }
   /** Click on an editor tab: select it, or close it on its × (or middle click). */
   private clickEditorTab(pane: Pane, column: number, button: number) {
     const hit = this.tabHits
@@ -643,6 +1067,8 @@ export class App {
       this.run(() => editor.closeBuffer!(hit.id));
       return true;
     }
+    // Choosing a tab leaves Neovim's diff tab page.
+    this.diffShown = undefined;
     if (editor.selectBuffer) this.run(() => editor.selectBuffer!(hit.id));
     this.closeImage(pane.id);
     this.tab().focused = pane.id;
@@ -753,6 +1179,8 @@ export class App {
     this.previewGeneration++;
     // Whatever Neovim shows next, hovering the old preview must load it again.
     this.lastPreview = path;
+    // An explicit open leaves the diff tab page, so the next diff must reopen.
+    this.diffShown = undefined;
   }
   private async flushPreview() {
     if (this.previewing) return;
@@ -1178,6 +1606,7 @@ export class App {
     if (
       pane.kind === "yazi" &&
       this.filesFocused &&
+      this.sideMode() === "files" &&
       this.tab().panes.some((p) => p.id === pane.id)
     ) {
       this.tab().focused = pane.id;
@@ -1306,9 +1735,8 @@ export class App {
       ),
       ...this.catalogue.order.map((name, index) => {
         const key =
-          index < TEMPLATE_ORDER.length
-            ? layoutDigit(index)
-            : (this.catalogue.templates[name]?.key ?? "");
+          (index < TEMPLATE_ORDER.length ? layoutDigit(index) : "") ||
+          (this.catalogue.templates[name]?.key ?? "");
         return cmd(`Layout: ${name} (${key || "menu"})`, () =>
           this.applyLayout(name),
         );
@@ -1433,6 +1861,31 @@ export class App {
         this.side = !this.side;
         if (!this.side) this.filesFocused = false;
         this.draw();
+      }),
+      cmd(
+        this.sideMode() === "changes"
+          ? "Side panel: show files"
+          : "Side panel: show Git changes",
+        () => this.setSideMode(this.sideMode() === "changes" ? "files" : "changes"),
+      ),
+      cmd("Source control: changes and diff layout", () =>
+        this.applyLayout("changes"),
+      ),
+      ...(["split", "unified"] as const).map((layout) => ({
+        ...cmd(
+          `Source control: ${layout === "split" ? "side-by-side" : "unified"} diff`,
+          () => this.setDiffLayout(layout),
+        ),
+        checked: this.diffLayout === layout,
+      })),
+      cmd("Source control: stage all changes", () => this.allStaged(true)),
+      cmd("Source control: unstage all changes", () => this.allStaged(false)),
+      cmd("Source control: close diff", async () => {
+        const pane = this.tab().panes.find(
+          (p) => p.kind === "nvim" && this.runtimes.get(p.id)?.editor,
+        );
+        await this.runtimes.get(pane?.id ?? "")?.editor?.closeDiff?.();
+        this.diffShown = undefined;
       }),
       ...(["file", "selection", "diagnostics"] as const).map((k) =>
         cmd(`Preview ${k} context for agent`, () => this.preview(k)),
@@ -1564,7 +2017,7 @@ export class App {
     this.openModal({
       kind: "help",
       title: "Under shortcuts",
-      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nCtrl+Left/Right: previous/next pane (no prefix)\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\no: quick open  g: go to workspace or tab\nTab/j/k: cycle panes  0-9: layouts\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
+      text: `${this.input.prefix}: application navigation\nPrefix twice: forward literal prefix\nCtrl+Left/Right: previous/next pane (no prefix)\nEscape: return to terminal / dismiss modal\nm: top menu  p: command palette  h or ?: this help\no: quick open  g: go to workspace or tab\nTab/j/k: cycle panes  0-9: layouts  d: changes & diff\nf: files (native Yazi keys; fallback arrows/j/k/Enter)\nChanges list: j/k diff · Enter edit · s stage · x discard · v split/unified\nr: working tree diff  s: staged diff  l: redraw\nEnter on idle chat: choose and start agent\nt: next tab  w: next workspace  z: zoom\n[ / ]: resize focused split  b: sidebar\ndrag a pane border to resize\nq: safe quit\n\nUse the palette to start tools, open files, run tasks,\nmove panes and preview context.\nNative terminal keys remain owned by the focused tool.`,
       index: 0,
       cancelMode: "app",
     });
@@ -1679,19 +2132,14 @@ export class App {
     workspace = this.workspace(),
     focus = true,
   ): boolean {
-    if (
-      ![
-        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
-        ".tif", ".tiff", ".ico", ".avif", ".heic",
-      ].includes(extname(path).toLowerCase())
-    )
-      return false;
+    if (!isImagePath(path)) return false;
     const tab = workspace.tabs.find((tab) =>
       tab.id === workspace.activeTab && tab.panes.some((pane) => pane.kind === "nvim"),
     ) ?? workspace.tabs.find((tab) => tab.panes.some((pane) => pane.kind === "nvim"));
     const pane = tab?.panes.find((pane) => pane.kind === "nvim");
     if (!tab || !pane) throw new Error("Add a Neovim pane to view images");
     this.imageView.source = undefined;
+    this.imageBase.source = undefined;
     this.imageDrag = undefined;
     this.annotationDraft = undefined;
     this.annotationMove = undefined;
@@ -1711,6 +2159,43 @@ export class App {
     this.imageView.source = path;
     this.draw();
     return true;
+  }
+  /** Show two versions of an image side by side over the editor pane, as
+   * VS Code's image diff does; zoom and pan apply to both. */
+  private openImageDiff(
+    pane: Pane,
+    name: string,
+    key: string,
+    sides: { left: ImageSide; right: ImageSide },
+    focus: boolean,
+  ) {
+    this.imageView.source = undefined;
+    this.imageBase.source = undefined;
+    this.imageDrag = undefined;
+    this.annotationDraft = undefined;
+    this.annotationMove = undefined;
+    const pending = (side: ImageSide) => (side.source ? "Loading…" : "none");
+    this.imagePreview = {
+      pane: pane.id,
+      title: `Image diff · ${displayName(name)}`,
+      status: "",
+      zoom: 1, panX: 0, panY: 0, annotate: false, boxes: [],
+      compare: {
+        key,
+        left: sides.left.label,
+        right: sides.right.label,
+        leftStatus: pending(sides.left),
+        rightStatus: pending(sides.right),
+      },
+    };
+    if (focus && this.tab().panes.some((p) => p.id === pane.id)) {
+      this.tab().focused = pane.id;
+      this.filesFocused = false;
+      if (!this.modal) this.input.mode = "terminal";
+    }
+    this.imageBase.source = sides.left.source;
+    this.imageView.source = sides.right.source;
+    this.draw();
   }
   private annotationPoint(x: number, y: number) {
     const viewport = this.imageViewport;
@@ -1793,6 +2278,7 @@ export class App {
   private closeImage(pane = this.imagePreview?.pane) {
     if (!this.imagePreview || pane !== this.imagePreview.pane) return;
     this.imageView.source = undefined;
+    this.imageBase.source = undefined;
     this.imagePreview = undefined;
     this.imageDrag = undefined;
     this.annotationDraft = undefined;
@@ -1855,11 +2341,11 @@ export class App {
           c.name,
         );
       if (label === "View")
-        return /^(Toggle |Grow |Shrink |Move |Close focused|Focus files|Refresh files|Go to |Layout: )/.test(
+        return /^(Toggle |Grow |Shrink |Move |Close focused|Focus files|Refresh files|Side panel: |Go to |Layout: )/.test(
           c.name,
         );
       if (label === "Review")
-        return /^(Working tree diff|Staged diff|Review )/.test(c.name);
+        return /^(Source control: |Working tree diff|Staged diff|Review )/.test(c.name);
       if (label === "Tools")
         return /^(Start focused|Stop |Restart |Add |Split |Run task|Reload|Redraw)/.test(
           c.name,
@@ -1963,6 +2449,8 @@ export class App {
         key.preventDefault();
         key.stopPropagation();
         if (["escape", "return", "enter"].includes(key.name)) this.closeImage();
+        else if (this.imagePreview?.compare && ["a", "u", "c", "p"].includes(key.name))
+          this.report("Annotations and copies work on a single image, not an image diff");
         else if (key.name === "a") this.toggleAnnotations();
         else if (key.name === "u") {
           this.annotationDraft = undefined;
@@ -2086,6 +2574,12 @@ export class App {
         this.filesFocused &&
         !["tab", "m", "p", "f", "b"].includes(key.name)
       ) {
+        if (this.sideMode() === "changes") {
+          if (this.changesKey(key.name)) {
+            this.draw();
+            return;
+          }
+        } else {
         if (["j", "down"].includes(key.name)) {
           this.fileBrowser().move(1);
           this.previewSelected();
@@ -2106,6 +2600,7 @@ export class App {
           });
         this.draw();
         return;
+        }
       }
       if (key.name === "tab" && this.filesFocused) {
         this.filesFocused = false;
@@ -2162,13 +2657,15 @@ export class App {
     const agent =
       this.tab().panes.find((pane) => pane.kind === "agent")?.profile ?? "codex";
     applyTemplate(this.tab(), name, agent, this.catalogue);
+    this.sideOverride.delete(this.tab().id);
+    if (template.sidebar === "changes") this.showChanges();
     this.report(`Layout: ${template.label}`);
   }
   private refreshCatalogue() {
     this.catalogue = catalogue(this.config.templates);
     this.layoutKeys = new Map<string, string>();
     this.catalogue.order.forEach((name, index) => {
-      if (index < TEMPLATE_ORDER.length)
+      if (index < TEMPLATE_ORDER.length && layoutDigit(index))
         this.layoutKeys.set(layoutDigit(index), name);
       const key = this.catalogue.templates[name]?.key;
       if (key) this.layoutKeys.set(key, name);
@@ -2467,9 +2964,14 @@ export class App {
     );
     if (!this.side && t.panes.find((p) => p.id === t.focused)?.kind === "yazi")
       t.focused = t.panes.find((p) => p.kind !== "yazi")?.id ?? t.focused;
+    const mode = this.sideMode();
+    // Yazi replaces the file list, not the Changes list.
     const side =
-      !nativeFiles && this.side && (width >= 80 || this.filesFocused) && !t.zoom
-        ? Math.min(24, width)
+      (mode === "changes" || !nativeFiles) &&
+      this.side &&
+      (width >= 80 || this.filesFocused) &&
+      !t.zoom
+        ? Math.min(mode === "changes" ? 30 : 24, width)
         : 0;
     this.header.top = navbar.height;
     this.header.width = width;
@@ -2478,6 +2980,22 @@ export class App {
     this.sidebar.top = top;
     this.sidebar.width = side;
     this.sidebar.height = Math.max(1, height - top - 1);
+    if (mode === "changes") {
+      // A tab restored in the Changes layout starts watching on first draw.
+      this.watchChanges();
+      const view = changesView(
+        this.changesList(),
+        side,
+        this.sidebar.height,
+        this.filesFocused,
+        this.colors,
+      );
+      const entries = this.changesList().entries;
+      this.changeRows = new Map(
+        [...view.rows].map(([line, index]) => [line, entries[index]!]),
+      );
+      this.sidebar.content = view.text;
+    } else {
     const browser = this.fileBrowser();
     const fileRows = Math.max(1, this.sidebar.height - 4);
     const fileStart = Math.max(0, browser.selected - fileRows + 1);
@@ -2500,6 +3018,7 @@ export class App {
                 .join("\n")
             : " Empty directory") +
       "\n\n Enter open · r reload";
+    }
     this.footer.top = Math.max(0, height - 1);
     this.footer.width = width;
     // Entering navigation mode must be obvious: it is the only signal that the
@@ -2662,21 +3181,43 @@ export class App {
       this.imageFrame.width = imageCell.width;
       this.imageFrame.height = imageCell.height;
       this.imageFrame.borderColor = this.imageFocused() ? this.colors.accent : this.colors.border;
-      const width = Math.max(1, imageCell.width - 2);
+      const compare = this.imagePreview.compare;
+      const full = Math.max(1, imageCell.width - 2);
+      // An image diff splits the frame: Git's side left, the file right, with
+      // one blank column between them.
+      const width = compare ? Math.max(1, Math.floor((full - 1) / 2)) : full;
       const height = Math.max(1, imageCell.height - 5);
+      this.imageViewport.left = compare ? full - width : 0;
       this.imageViewport.width = width;
       this.imageViewport.height = height;
-      const fitted = this.imageView.getFittedSize(width, height);
-      const scaledWidth = Math.max(1, Math.round(fitted.width * this.imagePreview.zoom));
-      const scaledHeight = Math.max(1, Math.round(fitted.height * this.imagePreview.zoom));
-      const limitX = Math.max(0, (scaledWidth - width) / 2);
-      const limitY = Math.max(0, (scaledHeight - height) / 2);
+      const roomy = imageCell.width >= 4 && imageCell.height >= 6;
+      this.imageBaseViewport.visible = !!compare && roomy;
+      this.imageBase.visible = !!compare && roomy && this.imageBase.source !== undefined;
+      this.imageBaseViewport.width = width;
+      this.imageBaseViewport.height = height;
+      const views = compare ? [this.imageView, this.imageBase] : [this.imageView];
+      const sizes = views.map((view) => {
+        // A side with no image (an added or deleted file) takes no room.
+        if (view.source === undefined) return { width: 1, height: 1 };
+        const fitted = view.getFittedSize(width, height);
+        return {
+          width: Math.max(1, Math.round(fitted.width * this.imagePreview!.zoom)),
+          height: Math.max(1, Math.round(fitted.height * this.imagePreview!.zoom)),
+        };
+      });
+      const limitX = Math.max(0, ...sizes.map((size) => (size.width - width) / 2));
+      const limitY = Math.max(0, ...sizes.map((size) => (size.height - height) / 2));
       this.imagePreview.panX = Math.max(-limitX, Math.min(limitX, this.imagePreview.panX));
       this.imagePreview.panY = Math.max(-limitY, Math.min(limitY, this.imagePreview.panY));
-      this.imageView.width = scaledWidth;
-      this.imageView.height = scaledHeight;
-      this.imageView.left = Math.round((width - scaledWidth) / 2 + this.imagePreview.panX);
-      this.imageView.top = Math.round((height - scaledHeight) / 2 + this.imagePreview.panY);
+      views.forEach((view, index) => {
+        const size = sizes[index]!;
+        view.width = size.width;
+        view.height = size.height;
+        view.left = Math.round((width - size.width) / 2 + this.imagePreview!.panX);
+        view.top = Math.round((height - size.height) / 2 + this.imagePreview!.panY);
+      });
+      const scaledWidth = sizes[0]!.width;
+      const scaledHeight = sizes[0]!.height;
       const boxes = [...this.imagePreview.boxes, ...(this.annotationDraft ? [this.annotationDraft] : [])];
       boxes.forEach((box, index) => {
         let view = this.annotationViews[index];
@@ -2703,7 +3244,10 @@ export class App {
         view.height = Math.max(1, Math.round(bounds.height * scaledHeight));
       });
       for (const view of this.annotationViews.slice(boxes.length)) view.visible = false;
-      this.imageText.content = `${this.imagePreview.title}\n${this.imagePreview.status} · ${Math.round(this.imagePreview.zoom * 100)}% fit · ${this.imagePreview.annotate ? "DRAW" : "PAN"}\na draw/pan · u undo · c PNG · p path`;
+      const zoom = `${Math.round(this.imagePreview.zoom * 100)}% fit`;
+      this.imageText.content = compare
+        ? `${this.imagePreview.title} · ${zoom}\n${compare.left}: ${compare.leftStatus}  →  ${compare.right}: ${compare.rightStatus}\nwheel/+/- zoom · drag/arrows pan · 0 fit · Esc close`
+        : `${this.imagePreview.title}\n${this.imagePreview.status} · ${zoom} · ${this.imagePreview.annotate ? "DRAW" : "PAN"}\na draw/pan · u undo · c PNG · p path`;
 
     }
     // Draggable boundaries sit above the panes so grabbing one never reaches a
@@ -2821,6 +3365,10 @@ export class App {
     if (this.disposed) return;
     this.disposed = true;
     clearInterval(this.timer);
+    clearInterval(this.changesPoll);
+    clearTimeout(this.changesReload);
+    clearTimeout(this.diffTimer);
+    this.diffGeneration++;
     this.renderer.keyInput.off("keypress", this.onKey);
     this.renderer.keyInput.off("paste", this.onPaste);
     this.renderer.off("resize", this.draw);

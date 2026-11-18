@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import {
   PANE_KINDS,
   TEMPLATE_KEYS,
+  SIDEBAR_MODES,
+  type SidebarMode,
   type NumberLayout,
   type PaneKind,
   type Template,
@@ -13,6 +15,8 @@ import { THEMES, type ThemeName } from "./theme.ts";
 
 export const REVIEW_TOOLS = ["hunk", "reviewr"] as const;
 export type ReviewTool = (typeof REVIEW_TOOLS)[number];
+export const DIFF_LAYOUTS = ["split", "unified"] as const;
+export type DiffLayout = (typeof DIFF_LAYOUTS)[number];
 export type Profile = { argv: string[]; env?: Record<string, string> };
 export type Task = Profile & { shell?: boolean };
 export type Config = {
@@ -34,6 +38,8 @@ export type Config = {
   editorTabs: boolean;
   /** Tool for Review actions: Hunk, or herdr-reviewr run standalone. */
   reviewTool: ReviewTool;
+  /** How the Changes view shows a diff in Neovim. */
+  diffLayout: DiffLayout;
   profiles: Record<string, Profile>;
   tasks: Record<string, Task>;
   templates: Record<string, Template>;
@@ -47,6 +53,7 @@ export const defaults: Config = {
   followActiveFile: true,
   editorTabs: true,
   reviewTool: "hunk",
+  diffLayout: "split",
   profiles: {
     nvim: { argv: ["nvim"] },
     yazi: { argv: ["yazi"] },
@@ -128,7 +135,8 @@ const shapeIndices = (shape: NumberLayout): number[] =>
 function customTemplate(name: string, value: unknown): Template {
   if (!record(value)) throw new Error("template must be an object");
   const unknown = Object.keys(value).find(
-    (key) => !["label", "panes", "layout", "focus", "key"].includes(key),
+    (key) =>
+      !["label", "panes", "layout", "focus", "key", "sidebar"].includes(key),
   );
   if (unknown) throw new Error(`unknown option ${unknown}`);
   const entries = templateSlots(value.panes);
@@ -147,6 +155,11 @@ function customTemplate(name: string, value: unknown): Template {
     throw new Error("key must be a string");
   if (typeof value.key === "string" && !TEMPLATE_KEYS.includes(value.key))
     throw new Error(`key must be one of ${TEMPLATE_KEYS.join(", ")}`);
+  if (
+    value.sidebar !== undefined &&
+    !(SIDEBAR_MODES as readonly unknown[]).includes(value.sidebar)
+  )
+    throw new Error(`sidebar must be one of ${SIDEBAR_MODES.join(", ")}`);
   const label = value.label === undefined ? name : value.label;
   if (typeof label !== "string" || !label.trim())
     throw new Error("label must be a non-empty string");
@@ -156,6 +169,9 @@ function customTemplate(name: string, value: unknown): Template {
     focus,
     shape,
     ...(typeof value.key === "string" ? { key: value.key } : {}),
+    ...(value.sidebar !== undefined
+      ? { sidebar: value.sidebar as SidebarMode }
+      : {}),
   };
 }
 export function validatePatch(value: unknown): Partial<Config> {
@@ -194,6 +210,10 @@ export function validatePatch(value: unknown): Partial<Config> {
     ) {
       if (typeof v !== "boolean") throw new Error(`${key} must be true or false`);
       patch[key] = v;
+    } else if (key === "diffLayout") {
+      if (typeof v !== "string" || !DIFF_LAYOUTS.includes(v as DiffLayout))
+        throw new Error(`diffLayout must be one of ${DIFF_LAYOUTS.join(", ")}`);
+      patch.diffLayout = v as DiffLayout;
     } else if (key === "reviewTool") {
       if (typeof v !== "string" || !REVIEW_TOOLS.includes(v as ReviewTool))
         throw new Error(`reviewTool must be one of ${REVIEW_TOOLS.join(", ")}`);
