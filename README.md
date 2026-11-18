@@ -154,6 +154,7 @@ destination never restarts or reloads a tool.
 | [ / ]               | Shrink / grow focused split                              |
 | drag a pane border  | Resize that split with the mouse                        |
 | 0–9                 | Apply a layout template (see Layouts)                   |
+| d                   | Changes and side-by-side diff (see Source control)      |
 | b                   | Toggle workspace sidebar                                 |
 | ? / h               | Shortcut help                                            |
 | q                   | Save layout and quit after checking unsaved buffers      |
@@ -185,6 +186,7 @@ new tabs from the File menu (**New &lt;name&gt; tab**).
 | 8 | `run` | terminal only |
 | 9 | `editor-chat-stack` | editor above chat |
 | 0 | `chat-shell` | chat above a free terminal |
+| d | `changes` | Git changes \| diff in the editor \| chat |
 
 Applying a template only **shows, hides and arranges** panes. Nothing is stopped,
 restarted or reloaded, so a running chat keeps its thread and Neovim keeps its
@@ -222,7 +224,8 @@ and merged over the built-ins:
 `panes` is the tab order, `layout` is the split tree with pane indexes as
 leaves, `focus` is the pane that receives focus, and `key` is an optional extra
 shortcut from the keys navigation does not own (`h` is reserved for the shortcut
-help). A custom template may override a built-in of the same name, and
+help; a custom template's key wins over the built-in `d`). `"sidebar":
+"changes"` makes the side panel list Git changes while the template is applied. A custom template may override a built-in of the same name, and
 `preset` accepts a custom name as the workspace's initial layout. Invalid
 definitions are reported as a warning naming the offending field.
 
@@ -278,6 +281,53 @@ and paste them into the agent; `e` opens the line in Under's Neovim. When Under
 runs inside herdr, Under hides herdr's pane identity from reviewr so it never
 sends to a pane outside Under.
 
+### Source control: changes and side-by-side diff
+
+`Ctrl-G d` (or **Source control: changes and diff layout** in the Review menu)
+arranges the tab like VS Code's Source Control: the side panel lists the
+repository's changed files in **Staged** and **Changes** groups, the editor shows
+the diff, and the agent stays on the right.
+
+Moving through the list shows each file's diff in Neovim, side by side in diff
+mode: Git's version on the left (read-only), and on the right the **real file**,
+so you edit, undo, save and use LSP as usual while the diff updates. Matching
+lines are aligned, changed lines and the changed part of a line are highlighted,
+and both sides scroll together; `]c` / `[c` jump between changes. A row under
+Staged compares `HEAD` with the index. The diff opens in its own Neovim tab page,
+reused by the next diff and closed when you open a file normally, pick an editor
+tab, or run **Source control: close diff**.
+
+| Changes list key | Action |
+| --- | --- |
+| j / k, arrows, wheel | Select a file and show its diff |
+| Enter / → | Show the diff and move the keyboard to the editor |
+| s / Space, or click `+` / `−` | Stage the file, or unstage it from Staged |
+| x | Discard the file's changes (an untracked file is deleted), after a confirmation |
+| v | Switch between side-by-side and unified diffs |
+| r | Reload |
+
+The **unified** layout (`v`, **Source control: unified diff**, or
+`"diffLayout": "unified"` in the config) shows one window with the real file,
+like VS Code's inline view: added and changed lines are highlighted, removed lines
+appear above them as read-only virtual lines, and the overlay follows your edits.
+`]c` / `[c` move between changes there too, unless your configuration already
+maps them for that buffer. The menu choice lasts for the session; the config key
+sets the default (`split`).
+
+**Images** (PNG, JPEG, WebP, GIF and the other formats the image viewer
+opens) are compared in Under's viewer instead of Neovim, as in VS Code: Git's
+version on the left, the file on the right, with each side's size in the title.
+Zoom (wheel, `+`/`-`) and pan (drag, arrows) apply to both sides together; `0`
+fits them again and Esc closes the comparison. An added or deleted image shows
+`none` on its missing side. Image diffs are always side by side.
+
+Staging works on whole files; stage single hunks with Hunk or your Neovim
+plugins. Discarding refuses a file with unsaved editor changes and reloads the
+buffer afterwards. The list refreshes after saves, actions and every two seconds
+while it is visible, so an agent's edits show up. **Side panel: show Git changes /
+show files** switches the side panel in any layout; **stage all** / **unstage
+all** are in the Review menu.
+
 ### Worktrees
 
 **Open a worktree…** lists the current repository's checkouts — the primary one,
@@ -330,6 +380,7 @@ arguments and environment.
   "followActiveFile": true,
   "editorTabs": true,
   "reviewTool": "hunk",
+  "diffLayout": "split",
   "profiles": {
     "nvim": { "argv": ["nvim"] },
     "codex": { "argv": ["codex"] },

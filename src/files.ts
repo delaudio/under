@@ -1,7 +1,15 @@
 import { readdir } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 
 export type FileEntry = { name: string; path: string; directory: boolean };
+
+/** Extensions Under shows in its image viewer instead of Neovim. */
+export const IMAGE_EXTENSIONS = [
+  ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
+  ".tif", ".tiff", ".ico", ".avif", ".heic",
+];
+export const isImagePath = (path: string) =>
+  IMAGE_EXTENSIONS.includes(extname(path).toLowerCase());
 export const displayName = (name: string) =>
   name.replace(/[\x00-\x1f\x7f]/g, "�");
 

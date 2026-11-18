@@ -61,7 +61,8 @@ export type TemplateName =
   | "editor"
   | "run"
   | "editor-chat-stack"
-  | "chat-shell";
+  | "chat-shell"
+  | "changes";
 export type TemplateSlot = { kind: PaneKind; profile?: string };
 /** Serialized split tree a configuration file can express: leaves are slot indexes. */
 export type NumberLayout =
@@ -82,7 +83,11 @@ export type Template = {
   shape: NumberLayout;
   /** Optional extra shortcut key, from TEMPLATE_KEYS. */
   key?: string;
+  /** What the side panel lists while the template is applied; files by default. */
+  sidebar?: SidebarMode;
 };
+export const SIDEBAR_MODES = ["files", "changes"] as const;
+export type SidebarMode = (typeof SIDEBAR_MODES)[number];
 export type Catalogue = {
   templates: Record<string, Template>;
   /** Built-ins first, then user templates in declaration order. */
@@ -118,6 +123,7 @@ export const TEMPLATE_ORDER: TemplateName[] = [
   "run",
   "editor-chat-stack",
   "chat-shell",
+  "changes",
 ];
 const row = (
   ratio: number,
@@ -210,6 +216,19 @@ export const TEMPLATES: Record<TemplateName, Template> = {
     slots: [{ kind: "agent" }, { kind: "shell", profile: "shell" }],
     focus: 0,
     shape: column(0.6, 0, 1),
+  },
+  // VS Code's Source Control: changed files beside a side-by-side diff that
+  // edits the real file, with the agent alongside.
+  changes: {
+    label: "changes, diff, chat",
+    slots: [
+      { kind: "nvim", profile: "nvim" },
+      { kind: "agent" },
+    ],
+    focus: 0,
+    shape: row(0.7, 0, 1),
+    key: "d",
+    sidebar: "changes",
   },
 };
 const slotProfile = (slot: TemplateSlot, agent: string) =>

@@ -135,6 +135,10 @@ export const TemplateRun = {
   render: () => terminalPreview("tpl-run"),
 } satisfies StoryObj;
 
+export const TemplateChanges = {
+  render: () => terminalPreview("tpl-changes"),
+} satisfies StoryObj;
+
 export const TemplateEditorChatStack = {
   render: () => terminalPreview("tpl-editor-chat-stack"),
 } satisfies StoryObj;

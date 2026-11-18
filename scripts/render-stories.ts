@@ -148,6 +148,16 @@ for (const spec of catalog) {
           }
         : defaults,
     worktrees: spec.state.startsWith("worktrees") ? worktreeFixtures : undefined,
+    changes:
+      spec.state === "tpl-changes"
+        ? [
+            { path: "src/app.ts", staged: true, status: "M" },
+            { path: "src/app.ts", staged: false, status: "M" },
+            { path: "src/changes.ts", staged: false, status: "U" },
+            { path: "docs/old-notes.md", staged: false, status: "D" },
+            { path: "README.md", staged: false, status: "M" },
+          ]
+        : undefined,
     quickFiles: spec.state.startsWith("quick")
       ? [
           "src/app.ts",
